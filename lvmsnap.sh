@@ -12,7 +12,8 @@ MYSQLLV=mysql-data
 MYSQLDD=/mysql/data
 # Temporary file
 TMPFILE=/tmp/lvmsnap-$$.tmp
-
+# Binary logs directory
+BLOGDIR=/mysql/logs
 # Commands are snapshot, merge, list
 CMD=$1
 RESTRSNAP=$2
@@ -20,6 +21,7 @@ RESTRSNAP=$2
 function trim {
   echo 'Trimming excess snapshots .. '
   lvs --noheadings -o lv_path|grep 'sb/mysql-data-'|head -n-4|awk '{print $1}'|xargs lvremove -f 
+  ls $BLOGDIR|grep 'mysql-data-'|head -n-4|xargs rm -rf 
   echo 'done'
   echo
   lvs
@@ -28,9 +30,11 @@ function trim {
 
 function snap {
   echo 'Taking a new snapshot .. '
+  snap="$MYSQLLV-`date +%Y%m%d%H%M`"
   mysql <<EOD 
 FLUSH TABLES WITH READ LOCK;
-\! lvcreate --size=$SNAPSZE --snapshot --name $MYSQLLV-`date +%Y%m%d%H%M` /dev/${MYSQLVG}/${MYSQLLV}
+\! mysql -e 'SHOW MASTER STATUS' > $BLOGDIR/${snap}-binlog-info
+\! lvcreate --size=$SNAPSZE --snapshot --name $snap /dev/${MYSQLVG}/${MYSQLLV} > /dev/null 2>&1
 UNLOCK TABLES;
 EOD
   echo 'done'
