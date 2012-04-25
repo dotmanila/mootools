@@ -6,22 +6,19 @@
 #   XtraBackup based backups for MySQL.                      #
 #                                                            #
 # @author Jervin Real <jervin.real@percona.com>              #
-# @todo Lock based mutex.                                    #
-# @todo Fix purging of old backups from the filesystem       #
 #                                                            #
 ##############################################################
-
-PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:${PATH}
 
 # What type of backup, 'full', 'incr'
 BKP_TYPE=$1
 # If type is incremental, and this options is specified, it will be used as 
 #    incremental basedir instead.
-INC_BSEDIR=$2
+INC_BSEDIR=$3
 # Local options
 WORK_DIR=/ssd/sb/xbackups
 DATADIR=/ssd/sb/msb_5_0_91/data
-CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
+CURDATE=$2
+#CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
 LOG_FILE="${WORK_DIR}/${CURDATE}.log"
 INF_FILE="${WORK_DIR}/${CURDATE}-info.log"
 
@@ -39,7 +36,11 @@ MY="/ssd/sb/msb_5_0_91/use percona"
 #      Modifications not recommended beyond this point.      #
 ##############################################################
 
+if [ -f /tmp/xbackup.lock ]; then echo "ERROR: Another backup is still running!" | tee $INF_FILE; exit 1; fi
+touch /tmp/xbackup.lock
+
 if [ ! -n "${BKP_TYPE}" ]; then echo "ERROR: No backup type specified!"; exit 1; fi
+echo "Backup type: ${BKP_TYPE}" | tee -a $INF_FILE
 
 _start_backup_date=`date`
 echo "Backup job started: ${_start_backup_date}" | tee -a $INF_FILE
@@ -203,52 +204,12 @@ echo
 if [ "$RETVAR" -gt 0 ]; then
    echo "ERROR: non-zero exit status of xtrabackup during --apply-log. Something may have failed! Please prepare, I have not deleted the new backup directory.";
    exit 1;
-else
-   echo "Cleaning up previous backup files:"
-   # Depending on how many sets to keep, we query the backups table.
-   # Find the ids of base backups first.
-   _prune_base=$($MY -BNe "SELECT id FROM backups WHERE type = 'full' ORDER BY started_at DESC LIMIT 2,999999")
-   if [ -n "$_prune_base" ]; then
-      _sql=$(cat <<EOF
-SELECT 
-   GROUP_CONCAT(' ',DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s')) 
-FROM backups 
-WHERE id IN (${_prune_base}) OR 
-   baseid IN (${_prune_base}) 
-ORDER BY id
-EOF
-)
-      echo
-      echo "SQL: ${_sql}"
-      echo
-      _prune_list=$($MY -BNe "${_sql}")
-      if [ -n "$_prune_list" ]; then
-         echo "Deleting backups: ${_prune_list}"
-         _sql=$(cat <<EOF
-DELETE FROM backups 
-WHERE id IN (${_prune_base}) OR 
-   baseid IN (${_prune_base})
-EOF
-)
-         echo
-         echo "SQL: ${_sql}"
-         echo
-         cd $WORK_DIR && rm -rf $_prune_list && $MY -e "${_sql}"
-      fi
-   fi
-   echo " ... done"
-   echo
-   #ls -1 | egrep '^[0-9]{4}-[0-9]{2}-[0-9]{2}' | sort -nr | awk "NR > ${STORE}" | xargs rm -rf
-   _bu_size=`du -h --max-depth=0 ${WORK_DIR}/${CURDATE}|awk '{print $1}'`
-   _du_left=`df -h $WORK_DIR|tail -n-1|awk '{print $3}'`
-   echo "Backup size: ${_bu_size}" | tee -a "${INF_FILE}"
-   echo "Remaining space on backup on device: ${_du_left}" | tee -a "${INF_FILE}"
-   echo "Logfile: ${LOG_FILE}" | tee -a "${INF_FILE}"
-   echo
 fi
 
 _started_at=`date -d "${_start_backup_date}" "+%Y-%m-%d %H:%M:%S"`
 _ends_at=`date -d "${_end_prepare_date}" "+%Y-%m-%d %H:%M:%S"`
+_bu_size=`du -h --max-depth=0 ${WORK_DIR}/${CURDATE}|awk '{print $1}'`
+_du_left=`df -h $WORK_DIR|tail -n-1|awk '{print $3}'`
 
 _sql=$(cat <<EOF
 INSERT INTO backups 
@@ -265,5 +226,47 @@ echo "SQL: ${_sql}"
 echo
 
 if [ -n "$MY" ]; then $MY -e "${_sql}"; fi
+
+echo "Cleaning up previous backup files:"
+# Depending on how many sets to keep, we query the backups table.
+# Find the ids of base backups first.
+_prune_base=$($MY -BNe "SELECT GROUP_CONCAT(id SEPARATOR ',') FROM (SELECT id FROM backups WHERE type = 'full' ORDER BY started_at DESC LIMIT ${STORE},999999) t")
+if [ -n "$_prune_base" ]; then
+   _sql=$(cat <<EOF
+SELECT 
+   CONCAT(GROUP_CONCAT(DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s') SEPARATOR '* '),'*') 
+FROM backups 
+WHERE id IN (${_prune_base}) OR 
+   baseid IN (${_prune_base}) 
+ORDER BY id
+EOF
+)
+   echo
+   echo "SQL: ${_sql}"
+   echo
+   _prune_list=$($MY -BNe "${_sql}")
+   if [ -n "$_prune_list" ]; then
+      echo "Deleting backups: ${_prune_list}"
+      _sql=$(cat <<EOF
+DELETE FROM backups 
+WHERE id IN (${_prune_base}) OR 
+   baseid IN (${_prune_base})
+EOF
+)
+      echo
+      echo "SQL: ${_sql}"
+      echo
+      cd $WORK_DIR && rm -rf $_prune_list && $MY -e "${_sql}"
+   fi
+fi
+echo " ... done"
+echo
+
+echo "Backup size: ${_bu_size}" | tee -a "${INF_FILE}"
+echo "Remaining space on backup on device: ${_du_left}" | tee -a "${INF_FILE}"
+echo "Logfile: ${LOG_FILE}" | tee -a "${INF_FILE}"
+echo
+
+rm -rf /tmp/xbackup.lock
 
 exit 0
