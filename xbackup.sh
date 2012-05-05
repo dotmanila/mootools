@@ -206,7 +206,7 @@ if [ "$RETVAR" -gt 0 ]; then
    exit 1;
 fi
 
-_started_at=`date -d "${_start_backup_date}" "+%Y-%m-%d %H:%M:%S"`
+_started_at=`date -d "${CURDATE}" "+%Y-%m-%d %H:%M:%S"`
 _ends_at=`date -d "${_end_prepare_date}" "+%Y-%m-%d %H:%M:%S"`
 _bu_size=`du -h --max-depth=0 ${WORK_DIR}/${CURDATE}|awk '{print $1}'`
 _du_left=`df -h $WORK_DIR|tail -n-1|awk '{print $3}'`
