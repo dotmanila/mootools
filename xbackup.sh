@@ -19,6 +19,11 @@ WORK_DIR=/ssd/sb/xbackups
 DATADIR=/ssd/sb/msb_5_0_91/data
 CURDATE=$2
 #CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
+# If set to 1, apply log will not be on the original full backup but a copy will be made
+# instead then apply log will be on the copy including succeeding incrementals.
+# This allows you to preserve the original sets in case you need to recover to a day 
+# in the week.
+APPLY_TO_COPY=0
 LOG_FILE="${WORK_DIR}/${CURDATE}.log"
 INF_FILE="${WORK_DIR}/${CURDATE}-info.log"
 
@@ -31,6 +36,23 @@ USE_MEMORY=1G
 
 # If defined, backup information will be stored on database.
 MY="/ssd/sb/msb_5_0_91/use percona"
+
+# Table definition where backup information will be stored.
+TBL=$(cat <<EOF
+CREATE TABLE backups (
+  id int(10) unsigned NOT NULL auto_increment,
+  started_at timestamp NOT NULL default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP,
+  ends_at timestamp NOT NULL default '0000-00-00 00:00:00',
+  size varchar(15) default NULL,
+  path varchar(120) default NULL,
+  type enum('full','incr') NOT NULL default 'full',
+  incrbase timestamp NOT NULL default '0000-00-00 00:00:00',
+  weekno tinyint(3) unsigned NOT NULL default '0',
+  baseid int(10) unsigned NOT NULL default '0',
+  PRIMARY KEY  (`id`)
+) ENGINE=InnoDB;
+EOF
+)
 
 ##############################################################
 #      Modifications not recommended beyond this point.      #
@@ -111,7 +133,7 @@ fi
 if [ ! -d ${WORK_DIR} ]; then echo "ERROR: XtraBackup work directory does not exist"; exit 1; fi
 
 DATASIZE=`du --max-depth=0 $DATADIR|awk '{print $1}'`
-DISKSPCE=`df $WORK_DIR|tail -n-1|awk '{print $(NF-2)}'`
+DISKSPCE=`df -P $WORK_DIR|tail -n-1|awk '{print $4}'`
 HASSPACE=`echo "${DATASIZE} ${DISKSPCE}"|awk '{if($1 < $2) {print 1} else {print 0}}'`
 NOSPACE=0
 
@@ -176,7 +198,16 @@ EOF
       then
          echo "ERROR: No valid base backup found!";
          exit 1;
-      fi 
+      fi
+
+      _incr_basedir=$_incr_base 
+
+      # If we are applying to a copy of the base backup check it exists and set
+      # proper value
+      if [ $APPLY_TO_COPY -eq 1 ];
+      then
+         _incr_base="${_incr_base}-prepared"
+      fi  
 
       if [ ! -d "${WORK_DIR}/${_incr_base}" ];
       then
@@ -187,7 +218,27 @@ EOF
       echo "Preparing incremental backup with ${_ibx_prep}"
    else
       _incr_baseid=0
-      _ibx_prep="${_ibx_prep} --apply-log --redo-only ${WORK_DIR}/${CURDATE}"
+      _incr_basedir='0000-00-00_00_00_00'
+      
+      # If we are applying to a copy of the base backup check it exists and set
+      # proper value
+      if [ $APPLY_TO_COPY -eq 1 ];
+      then
+         _apply_to="${CURDATE}-prepared"
+         # Check to make sure we have enough disk space to make a copy
+         _bu_size=`du --max-depth=0 ${WORK_DIR}/${CURDATE}|awk '{print $1}'`
+         _du_left=`df -P $WORK_DIR|tail -n-1|awk '{print $4}'`
+         if [ "${_bu_size}" -gt "${_du_left}" ];
+         then
+            echo "ERROR: Apply to copy was specified, however there is not enough disk space lace on device."; exit 1;
+         else
+            cp -r ${WORK_DIR}/${CURDATE} ${WORK_DIR}/${_apply_to}
+         fi
+      else
+         _apply_to="${CURDATE}"
+      fi
+
+      _ibx_prep="${_ibx_prep} --apply-log --redo-only ${WORK_DIR}/${_apply_to}"
       echo "Preparing base backup with ${_ibx_prep}"
    fi
 
@@ -206,18 +257,19 @@ if [ "$RETVAR" -gt 0 ]; then
    exit 1;
 fi
 
-_started_at=`date -d "${CURDATE}" "+%Y-%m-%d %H:%M:%S"`
+_started_at="STR_TO_DATE('${CURDATE}','%Y-%m-%d_%H_%i_%s')"
 _ends_at=`date -d "${_end_prepare_date}" "+%Y-%m-%d %H:%M:%S"`
+_incr_basedir="STR_TO_DATE('${_incr_basedir}','%Y-%m-%d_%H_%i_%s')"
 _bu_size=`du -h --max-depth=0 ${WORK_DIR}/${CURDATE}|awk '{print $1}'`
-_du_left=`df -h $WORK_DIR|tail -n-1|awk '{print $3}'`
+_du_left=`df -Ph $WORK_DIR|tail -n-1|awk '{print $4}'`
 
 _sql=$(cat <<EOF
 INSERT INTO backups 
    (started_at, ends_at, size, path, 
    type, incrbase, weekno, baseid) 
-VALUES('${_started_at}','${_ends_at}',
+VALUES(${_started_at},'${_ends_at}',
    '${_bu_size}','${WORK_DIR}/${CURDATE}',
-   '${BKP_TYPE}','${_inc_basedir}', 
+   '${BKP_TYPE}',${_incr_basedir}, 
    ${_week_no}, ${_incr_baseid})
 EOF
 )
@@ -230,7 +282,23 @@ if [ -n "$MY" ]; then $MY -e "${_sql}"; fi
 echo "Cleaning up previous backup files:"
 # Depending on how many sets to keep, we query the backups table.
 # Find the ids of base backups first.
-_prune_base=$($MY -BNe "SELECT GROUP_CONCAT(id SEPARATOR ',') FROM (SELECT id FROM backups WHERE type = 'full' ORDER BY started_at DESC LIMIT ${STORE},999999) t")
+_sql=$(cat <<EOF
+SELECT COALESCE(GROUP_CONCAT(id SEPARATOR ','),'') 
+FROM (
+   SELECT id 
+   FROM backups 
+   WHERE type = 'full' 
+   ORDER BY started_at DESC 
+   LIMIT ${STORE},999999
+) t
+EOF
+)
+
+echo
+echo "SQL: ${_sql}"
+echo
+
+_prune_base=$($MY -BNe "${_sql}")
 if [ -n "$_prune_base" ]; then
    _sql=$(cat <<EOF
 SELECT 
