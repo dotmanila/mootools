@@ -4,7 +4,7 @@ CWD=`pwd`
 MAXTIME=3600
 TESTS='seqwr seqrd rndrd rndwr rndrw'
 SIZES='40 80'
-THREADS='8 16'
+THREADS='1 2 4 8 16 32 64'
 # Where is the mount point
 MOUNT=/ssd
 # Where is the device partition
