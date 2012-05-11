@@ -3,7 +3,7 @@
 CWD=`pwd`
 MAXTIME=3600
 TESTS='seqwr seqrd rndrd rndwr rndrw'
-SIZES='5 10'
+SIZES='40 80'
 THREADS='8 16'
 # Where is the mount point
 MOUNT=/ssd
