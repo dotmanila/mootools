@@ -14,21 +14,43 @@ BKP_TYPE=$1
 # If type is incremental, and this options is specified, it will be used as 
 #    incremental basedir instead.
 INC_BSEDIR=$3
-# Local options
-WORK_DIR=/ssd/sb/xbackups
-DATADIR=/ssd/sb/msb_5_0_91/data
-CURDATE=$2
-#CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
-# If set to 1, apply log will not be on the original full backup but a copy will be made
-# instead then apply log will be on the copy including succeeding incrementals.
-# This allows you to preserve the original sets in case you need to recover to a day 
-# in the week.
-APPLY_TO_COPY=0
-LOG_FILE="${WORK_DIR}/${CURDATE}.log"
-INF_FILE="${WORK_DIR}/${CURDATE}-info.log"
+# Base dir, this is where the backup will be stored first before being stored.
+WORK_DIR=/ssd/sb/xbackups/work
+# This is where the backups will be stored after verification. If this is empty
+# backups will be stored within the WORK_DIR. This should already exist as we will
+# not try to create one automatically for safety purpose. Within ths directory
+# must exist a bkps and bnlg subdirectories. In absence of a final stor, backups
+# and binlogs will be saved to WORK_DIR
+STOR_DIR=/ssd/sb/xbackups/stor
 
-# How many backups do we want to keep remote and optionally local
-STORE=1
+# If you want to ship the backups to a remote server, specify
+# here the SSH username and password and the remote directory
+# for the backups.
+RMTE_DIR=/ssd/sb/xbackups/rmte
+RMTE_SSH="revin@127.0.0.1"
+
+# Where are the MySQL data and binlog directories
+DATADIR=/ssd/sb/msb_5_0_91/data
+BNLGDIR=/ssd/sb/msb_5_0_91/data
+BNLGFMT=mysql-bin
+CURDATE=$2
+# If no CURDATE is given, i.e. not called from xbackup-run.sh
+if [ -z $CURDATE ]; then CURDATE=$(date +%Y-%m-%d_%H_%M_%S); fi
+
+# Whether to keep a prepared copy, sueful for
+# verification that the backup is good for use
+APPLY_LOG=1
+
+LOG_FILE="${WORK_DIR}/bkps/${CURDATE}.log"
+INF_FILE="${WORK_DIR}/bkps/${CURDATE}-info.log"
+
+# How many backup sets do you want to keep, these are the
+# count of full backups plus their incrementals. 
+# i.e. is you set 2, there will be 2 full backups + their
+# incrementals
+STORE=2
+
+KEEP_LCL=0
 
 # Will be used as --defaults-file for innobackupex if not empty
 DEFAULTS_FILE=/ssd/sb/msb_5_0_91/my.sandbox.cnf
@@ -36,6 +58,10 @@ USE_MEMORY=1G
 
 # If defined, backup information will be stored on database.
 MY="/ssd/sb/msb_5_0_91/use percona"
+
+# How to flush logs, on versions < 5.5.3, the BINARY clause
+# is not yet supported.
+FLOGS="${MY} -BNe 'FLUSH BINARY LOGS'"
 
 # Table definition where backup information will be stored.
 TBL=$(cat <<EOF
@@ -58,91 +84,193 @@ EOF
 #      Modifications not recommended beyond this point.      #
 ##############################################################
 
-if [ -f /tmp/xbackup.lock ]; then echo "ERROR: Another backup is still running!" | tee $INF_FILE; exit 1; fi
+_df() {
+   df -P -B 1K $1|tail -n-1|awk '{print $4}'
+}
+
+_df_h() {
+   df -Ph $1|tail -n-1|awk '{print $4}'
+}
+
+_du_r() {
+   du -B 1K --max-depth=0 $1|awk '{print $1}'
+}
+
+_du_h() {
+   du -h --max-depth=0 $1|awk '{print $1}'
+}
+
+_s_inf() {
+   echo $1 | tee -a $INF_FILE
+}
+
+_d_inf() {
+   echo $1 | tee -a $INF_FILE
+   exit 1
+}
+
+_sql_log() {
+   echo '' > $LOG_FILE
+}
+
+_sql_prune_base() {
+   _sql=$(cat <<EOF
+   SELECT COALESCE(GROUP_CONCAT(id SEPARATOR ','),'') 
+   FROM (
+      SELECT id 
+      FROM backups 
+      WHERE type = 'full' 
+      ORDER BY started_at DESC 
+      LIMIT ${STORE},999999
+   ) t
+EOF
+   )
+
+   _sql_log $_sql
+   $MY -BNe "${_sql}"
+}
+
+_sql_prune_list() {
+   _sql=$(cat <<EOF
+      SELECT 
+         CONCAT(GROUP_CONCAT(DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s') SEPARATOR '* '),'*') 
+      FROM backups 
+      WHERE id IN (${1}) OR 
+         baseid IN (${1}) 
+      ORDER BY id
+EOF
+   )
+
+   _sql_log $_sql
+   $MY -BNe "${_sql}"
+}
+
+_sql_prune_rows() {
+   _sql=$(cat <<EOF
+   DELETE FROM backups 
+   WHERE id IN (${1}) OR 
+      baseid IN (${1})
+EOF
+   )
+
+   _sql_log $_sql
+   $MY -BNe "${_sql}"
+}
+
+_sql_last_backup() {
+   _sql=$(cat <<EOF
+   SELECT 
+      DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s') 
+   FROM backups 
+   ORDER BY started_at DESC 
+   LIMIT 1
+EOF
+   )
+
+   _sql_log $_sql
+   $MY -BNe "${_sql}"
+}
+
+_sql_save_bkp() {
+   _sql=$(cat <<EOF
+   INSERT INTO backups 
+      (started_at, ends_at, size, path, 
+      type, incrbase, weekno, baseid) 
+   VALUES(${1},'${2}',
+      '${3}','${4}',
+      '${BKP_TYPE}',${5}, 
+      ${6}, ${7})
+EOF
+   )
+
+   _sql_log $_sql
+   $MY -BNe "${_sql}"
+}
+
+_sql_incr_bsedir() {
+   _sql=$(cat <<EOF
+   SELECT 
+      DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s'), id 
+   FROM backups 
+   WHERE type = 'full' AND 
+      weekno = ${_week_no}
+   ORDER BY started_at DESC
+   LIMIT 1
+EOF
+      )
+
+   _sql_log $_sql
+   $MY -BNe "${_sql}"
+}
+
+if [ -f /tmp/xbackup.lock ]; then 
+   _d_inf "ERROR: Another backup is still running or a previous backup failed, please investigate!"; 
+fi
 touch /tmp/xbackup.lock
 
-if [ ! -n "${BKP_TYPE}" ]; then echo "ERROR: No backup type specified!"; exit 1; fi
+if [ ! -n "${BKP_TYPE}" ]; then _d_inf "ERROR: No backup type specified!"; fi
 echo "Backup type: ${BKP_TYPE}" | tee -a $INF_FILE
 
 _start_backup_date=`date`
 echo "Backup job started: ${_start_backup_date}" | tee -a $INF_FILE
 
-_day_of_wk=`date +%u`
-#_day_of_wk=7
-
 # Check for innobackupex
 _ibx=`which innobackupex`
-if [ "$?" -gt 0 ]; then echo "ERROR: Could not find innobackupex binary!"; exit 1; fi
+if [ "$?" -gt 0 ]; then _d_inf "ERROR: Could not find innobackupex binary!"; fi
 if [ -n $DEFAULTS_FILE ]; then _ibx="${_ibx} --defaults-file=${DEFAULTS_FILE}"; fi
 
 _ibx_bkp="${_ibx} --no-timestamp"
+_this_bkp="${WORK_DIR}/bkps/${CURDATE}"
+
+if [ -n "$STOR_DIR" ]; then _this_stor=$STOR_DIR
+elif [ $KEEP_LCL -eq 1 ]; then _this_stor=$WORK_DIR
+else _this_stor=''
+fi
 
 # Determine what will be our --incremental-basedir
 if [ "${BKP_TYPE}" == "incr" ];
 then
    if [ -n "${INC_BSEDIR}" ]; 
    then
-      if [ ! -d ${WORK_DIR}/${INC_BSEDIR} ]; 
+      if [ ! -d ${WORK_DIR}/bkps/${INC_BSEDIR} ]; 
       then 
-         echo "ERROR: Specified incremental basedir ${WORK_DIR}/${_inc_basedir} does not exist."; 
-         exit 1; 
+         _d_inf "ERROR: Specified incremental basedir ${WORK_DIR}/bkps/${_inc_basedir} does not exist."; 
       fi
 
       _inc_basedir=$INC_BSEDIR
    else
-      _sql=$(cat <<EOF
-SELECT 
-   DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s') 
-FROM backups 
-ORDER BY started_at DESC 
-LIMIT 1
-EOF
-)
-      echo
-      echo "SQL: ${_sql}"
-      echo
-      _inc_basedir=$($MY -BNe "${_sql}")
+      _inc_basedir=$(_sql_last_backup)
    fi
 
    if [ ! -n "$_inc_basedir" ]; 
    then 
-      echo "ERROR: No valid incremental basedir found!"; 
-      exit 1; 
+      _d_inf "ERROR: No valid incremental basedir found!"; 
    fi
 
-   if [ ! -d "${WORK_DIR}/${_inc_basedir}" ]; 
+   if [ ! -d "${WORK_DIR}/bkps/${_inc_basedir}" ]; 
    then 
-      echo "ERROR: Incremental basedir ${WORK_DIR}/${_inc_basedir} does not exist."; 
-      exit 1; 
+      _d_inf "ERROR: Incremental basedir ${WORK_DIR}/bkps/${_inc_basedir} does not exist."; 
    fi
 
-   _ibx_bkp="${_ibx_bkp} --incremental ${WORK_DIR}/${CURDATE} --incremental-basedir  ${WORK_DIR}/${_inc_basedir}"
+   _ibx_bkp="${_ibx_bkp} --incremental ${_this_bkp} --incremental-basedir  ${WORK_DIR}/bkps/${_inc_basedir}"
    _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${_inc_basedir}','%Y-%m-%d_%H_%i_%s'),'%U')")
-   echo "Running incremental backup from basedir ${WORK_DIR}/${_inc_basedir}"
+   echo "Running incremental backup from basedir ${WORK_DIR}/bkps/${_inc_basedir}"
 else
-   _ibx_bkp="${_ibx_bkp} ${WORK_DIR}/${CURDATE}"
+   _ibx_bkp="${_ibx_bkp} ${_this_bkp}"
    _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${CURDATE}','%Y-%m-%d_%H_%i_%s'),'%U')")
-   echo "Running full backup ${WORK_DIR}/${CURDATE}"
+   echo "Running full backup ${_this_bkp}"
 fi
 
+# Check for work directory
+if [ ! -d ${WORK_DIR} ]; then _d_inf "ERROR: XtraBackup work directory does not exist"; fi
 
-# make sure we're root
-#if [ `whoami` != 'root' ]; then echo "ERROR: `basename $0` must be run as user root"; exit 1; fi
-
-# check for work directory
-if [ ! -d ${WORK_DIR} ]; then echo "ERROR: XtraBackup work directory does not exist"; exit 1; fi
-
-DATASIZE=`du --max-depth=0 $DATADIR|awk '{print $1}'`
-DISKSPCE=`df -P $WORK_DIR|tail -n-1|awk '{print $4}'`
+DATASIZE=$(_du_r $DATADIR)
+DISKSPCE=$(_df $WORK_DIR)
 HASSPACE=`echo "${DATASIZE} ${DISKSPCE}"|awk '{if($1 < $2) {print 1} else {print 0}}'`
 NOSPACE=0
 
 echo "Checking disk space ... (data: $DATASIZE) (disk: $DISKSPCE)"
 if [ "$HASSPACE" -eq "$NOSPACE" ]; then echo "WARNING: Insufficient space on backup directory"; exit 1; fi
-
-#TODAYBKUP=$(ls $WORK_DIR|egrep "^$CURDATE")
-# check if we're not running second time today
-#if [ "$?" -eq 0 ]; then  echo "ERROR: A backup for today ${WORK_DIR}/${TODAYBKUP} exists."; exit 1; fi
 
 echo
 echo "Xtrabackup started: `date`" | tee -a "${INF_FILE}"
@@ -152,7 +280,7 @@ echo
 _status=0
 
 #Llet's create the backup
-cd $WORK_DIR
+cd $WORK_DIR/bkps/
 echo "Backing up with: $_ibx_bkp"
 $_ibx_bkp
 RETVAR=$?
@@ -164,81 +292,91 @@ echo
 
 # Check the exit status from innobackupex, but dont exit right away if it failed
 if [ "$RETVAR" -gt 0 ]; then 
-   echo "ERROR: non-zero exit status of xtrabackup during backup. Something may have failed!"; 
-   exit 1; 
+   _d_inf "ERROR: non-zero exit status of xtrabackup during backup. Something may have failed!"; 
 fi
 
+# Sync the binary logs to local stor first.
+echo
+echo "Syncing binary log snapshots"
+rsync -avzp --delete $BNLGDIR/$BNLGFMT.* $_this_stor/bnlg/
+echo " ... done"
+
+# Create copies of the backup if STOR_DIR and RMTE_DIR+RMTE_SSH is
+# specified.
+if [ -n "$STOR_DIR" ]; then
+   echo
+   echo "Copying to immediate storage ${STOR_DIR}/bkps/"
+   cp -r $_this_bkp* $STOR_DIR/bkps/
+   if [ "$?" -gt 0 ]; then 
+      _s_inf "WARNING: Failed to copy ${_this_bkp} to ${STOR_DIR}/bkps/"; 
+   # Delete backup on work dir if no apply log is needed
+   elif [ "$APPLY_LOG" == 0 ]; then
+      rm -rf $WORK_DIR/bkps/*
+   # We also delete the previous incremental if the backup has been successful
+   elif [ "${BKP_TYPE}" == "incr" ]; then 
+      echo "Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
+      rm -rf ${WORK_DIR}/bkps/${_inc_basedir}*;
+   elif [ "${BKP_TYPE}" == "full" ]; then 
+      echo "Deleting previous work backups `find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs`"
+      find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs rm -rf 
+   fi
+   echo " ... done"
+fi
+
+if [[ -n "$RMTE_DIR" && -n "$RMTE_SSH" ]]; then
+   echo
+   echo "Syncing backup sets to remote $RMTE_SSH:$RMTE_DIR/"
+   rsync -avzp --delete -e ssh $STOR_DIR/ $RMTE_SSH:$RMTE_DIR/
+   if [ "$?" -gt 0 ]; then _s_inf "WARNING: Failed to sync ${STOR_DIR} to $RMTE_SSH:$RMTE_DIR/"; fi
+   echo " ... done"
+fi
+
+if [ "${BKP_TYPE}" == "incr" ]; then
+   set -- $(_sql_incr_bsedir $_week_no)
+   _incr_base=$1
+   _incr_baseid=$2
+   _incr_basedir=${_incr_base}
+else
+   _incr_baseid=0
+   _incr_basedir='0000-00-00_00_00_00'
+fi
+
+# Start, whether apply log is enabled
+if [ "$APPLY_LOG" == 1 ]; then
+
 if [ -n "${USE_MEMORY}" ]; then _ibx_prep="$_ibx --use-memory=$USE_MEMORY"; fi
-#THIS_BACKUP=$(ls -1 | egrep '^[0-9]{4}-[0-9]{2}-[0-9]{2}' | sort -nr | head -n1)
+
 if [ "$status" != 1 ]; then
    _start_prepare_date=`date`
    echo "Apply log started: ${_start_prepare_date}" | tee -a "${INF_FILE}"
 
    if [ "${BKP_TYPE}" == "incr" ];
    then 
-      # Determine the full backup based on the given incremental base dir and current week number.
-      _sql=$(cat <<EOF
-SELECT 
-   DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s'), id 
-FROM backups 
-WHERE type = 'full' AND 
-   weekno = ${_week_no}
-ORDER BY started_at DESC
-LIMIT 1
-EOF
-)
-      echo
-      echo "SQL: ${_sql}"
-      echo
-      set -- $($MY -BNe "${_sql}")
-      _incr_base=$1
-      _incr_baseid=$2
-
       if [ ! -n "$_incr_base" ];
       then
-         echo "ERROR: No valid base backup found!";
-         exit 1;
+         _d_inf "ERROR: No valid base backup found!";
       fi
 
-      _incr_basedir=$_incr_base 
+      _incr_base=P_${_incr_base}
 
-      # If we are applying to a copy of the base backup check it exists and set
-      # proper value
-      if [ $APPLY_TO_COPY -eq 1 ];
+      if [ ! -d "${WORK_DIR}/bkps/${_incr_base}" ];
       then
-         _incr_base="${_incr_base}-prepared"
-      fi  
-
-      if [ ! -d "${WORK_DIR}/${_incr_base}" ];
-      then
-         echo "ERROR: Base backup ${WORK_DIR}/${_incr_base} does not exist.";
-         exit 1;
+         _d_inf "ERROR: Base backup ${WORK_DIR}/bkps/${_incr_base} does not exist.";
       fi
-      _ibx_prep="${_ibx_prep} --apply-log ${WORK_DIR}/${_incr_base} --incremental-dir  ${WORK_DIR}/${CURDATE}"
+      _ibx_prep="${_ibx_prep} --apply-log ${WORK_DIR}/bkps/${_incr_base} --incremental-dir  ${_this_bkp}"
       echo "Preparing incremental backup with ${_ibx_prep}"
    else
-      _incr_baseid=0
-      _incr_basedir='0000-00-00_00_00_00'
-      
-      # If we are applying to a copy of the base backup check it exists and set
-      # proper value
-      if [ $APPLY_TO_COPY -eq 1 ];
-      then
-         _apply_to="${CURDATE}-prepared"
-         # Check to make sure we have enough disk space to make a copy
-         _bu_size=`du --max-depth=0 ${WORK_DIR}/${CURDATE}|awk '{print $1}'`
-         _du_left=`df -P $WORK_DIR|tail -n-1|awk '{print $4}'`
-         if [ "${_bu_size}" -gt "${_du_left}" ];
-         then
-            echo "ERROR: Apply to copy was specified, however there is not enough disk space lace on device."; exit 1;
-         else
-            cp -r ${WORK_DIR}/${CURDATE} ${WORK_DIR}/${_apply_to}
-         fi
+      _apply_to="${WORK_DIR}/bkps/P_${CURDATE}"
+      # Check to make sure we have enough disk space to make a copy
+      _bu_size=$(_du_r $_this_bkp)
+      _du_left=$(_df $WORK_DIR)
+      if [ "${_bu_size}" -gt "${_du_left}" ]; then
+         _d_inf "ERROR: Apply to copy was specified, however there is not enough disk space lace on device.";
       else
-         _apply_to="${CURDATE}"
+         cp -r ${_this_bkp} ${_apply_to}
       fi
 
-      _ibx_prep="${_ibx_prep} --apply-log --redo-only ${WORK_DIR}/${_apply_to}"
+      _ibx_prep="${_ibx_prep} --apply-log --redo-only ${_apply_to}"
       echo "Preparing base backup with ${_ibx_prep}"
    fi
 
@@ -251,80 +389,37 @@ echo
 echo "Apply log finished: ${_end_prepare_date}" | tee -a "${INF_FILE}"
 echo
 
-# Check the exit status from innobackupex, but dont exit right away if it failed
+# Check the exit status from innobackupex, but dont exit right 
+# away if it failed
 if [ "$RETVAR" -gt 0 ]; then
-   echo "ERROR: non-zero exit status of xtrabackup during --apply-log. Something may have failed! Please prepare, I have not deleted the new backup directory.";
-   exit 1;
+   _d_inf "ERROR: non-zero exit status of xtrabackup during --apply-log. Something may have failed! Please prepare, I have not deleted the new backup directory.";
+fi
+
+# End, whether apply log is enabled
 fi
 
 _started_at="STR_TO_DATE('${CURDATE}','%Y-%m-%d_%H_%i_%s')"
-_ends_at=`date -d "${_end_prepare_date}" "+%Y-%m-%d %H:%M:%S"`
+if [ "$APPLY_LOG" == 1 ]; then
+   _ends_at=`date -d "${_end_prepare_date}" "+%Y-%m-%d %H:%M:%S"`
+else
+   _ends_at=`date -d "${_end_backup_date}" "+%Y-%m-%d %H:%M:%S"`
+fi
 _incr_basedir="STR_TO_DATE('${_incr_basedir}','%Y-%m-%d_%H_%i_%s')"
-_bu_size=`du -h --max-depth=0 ${WORK_DIR}/${CURDATE}|awk '{print $1}'`
-_du_left=`df -Ph $WORK_DIR|tail -n-1|awk '{print $4}'`
+_bu_size=$(_du_h ${_this_bkp})
+_du_left=$(_df_h $WORK_DIR)
 
-_sql=$(cat <<EOF
-INSERT INTO backups 
-   (started_at, ends_at, size, path, 
-   type, incrbase, weekno, baseid) 
-VALUES(${_started_at},'${_ends_at}',
-   '${_bu_size}','${WORK_DIR}/${CURDATE}',
-   '${BKP_TYPE}',${_incr_basedir}, 
-   ${_week_no}, ${_incr_baseid})
-EOF
-)
-echo
-echo "SQL: ${_sql}"
-echo
-
-if [ -n "$MY" ]; then $MY -e "${_sql}"; fi
+_sql_save_bkp "${_started_at}" "${_ends_at}" "${_bu_size}" "${STOR_DIR}/bkps/${CURDATE}" "${_incr_basedir}" "${_week_no}" "${_incr_baseid}"
 
 echo "Cleaning up previous backup files:"
 # Depending on how many sets to keep, we query the backups table.
 # Find the ids of base backups first.
-_sql=$(cat <<EOF
-SELECT COALESCE(GROUP_CONCAT(id SEPARATOR ','),'') 
-FROM (
-   SELECT id 
-   FROM backups 
-   WHERE type = 'full' 
-   ORDER BY started_at DESC 
-   LIMIT ${STORE},999999
-) t
-EOF
-)
-
-echo
-echo "SQL: ${_sql}"
-echo
-
-_prune_base=$($MY -BNe "${_sql}")
+_prune_base=$(_sql_prune_base)
 if [ -n "$_prune_base" ]; then
-   _sql=$(cat <<EOF
-SELECT 
-   CONCAT(GROUP_CONCAT(DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s') SEPARATOR '* '),'*') 
-FROM backups 
-WHERE id IN (${_prune_base}) OR 
-   baseid IN (${_prune_base}) 
-ORDER BY id
-EOF
-)
-   echo
-   echo "SQL: ${_sql}"
-   echo
-   _prune_list=$($MY -BNe "${_sql}")
+   _prune_list=$(_sql_prune_list $_prune_base)
    if [ -n "$_prune_list" ]; then
       echo "Deleting backups: ${_prune_list}"
-      _sql=$(cat <<EOF
-DELETE FROM backups 
-WHERE id IN (${_prune_base}) OR 
-   baseid IN (${_prune_base})
-EOF
-)
-      echo
-      echo "SQL: ${_sql}"
-      echo
-      cd $WORK_DIR && rm -rf $_prune_list && $MY -e "${_sql}"
+      _sql_prune_rows $_prune_base
+      cd $STOR_DIR/bkps && rm -rf $_prune_list
    fi
 fi
 echo " ... done"
