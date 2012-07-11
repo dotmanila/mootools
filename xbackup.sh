@@ -296,10 +296,12 @@ if [ "$RETVAR" -gt 0 ]; then
 fi
 
 # Sync the binary logs to local stor first.
-echo
-echo "Syncing binary log snapshots"
-rsync -avzp --delete $BNLGDIR/$BNLGFMT.* $_this_stor/bnlg/
-echo " ... done"
+if [ -n "{$BNLGFMT}" ]; then
+   echo
+   echo "Syncing binary log snapshots"
+   rsync -avzp --delete $BNLGDIR/$BNLGFMT.* $_this_stor/bnlg/
+   echo " ... done"
+fi
 
 # Create copies of the backup if STOR_DIR and RMTE_DIR+RMTE_SSH is
 # specified.
@@ -309,16 +311,19 @@ if [ -n "$STOR_DIR" ]; then
    cp -r $_this_bkp* $STOR_DIR/bkps/
    if [ "$?" -gt 0 ]; then 
       _s_inf "WARNING: Failed to copy ${_this_bkp} to ${STOR_DIR}/bkps/"; 
+   else
+      _s_inf "Deleting previous work backups"
+      rm -rf $(ls|grep -v $CURDATE)
    # Delete backup on work dir if no apply log is needed
-   elif [ "$APPLY_LOG" == 0 ]; then
-      rm -rf $WORK_DIR/bkps/*
-   # We also delete the previous incremental if the backup has been successful
-   elif [ "${BKP_TYPE}" == "incr" ]; then 
-      echo "Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
-      rm -rf ${WORK_DIR}/bkps/${_inc_basedir}*;
-   elif [ "${BKP_TYPE}" == "full" ]; then 
-      echo "Deleting previous work backups `find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs`"
-      find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs rm -rf 
+#   elif [ "$APPLY_LOG" == 0 ]; then
+#      rm -rf $WORK_DIR/bkps/*
+#   # We also delete the previous incremental if the backup has been successful
+#   elif [ "${BKP_TYPE}" == "incr" ]; then 
+#      echo "Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
+#      rm -rf ${WORK_DIR}/bkps/${_inc_basedir}*;
+#   elif [ "${BKP_TYPE}" == "full" ]; then 
+#      echo "Deleting previous work backups `find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs`"
+#      find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs rm -rf 
    fi
    echo " ... done"
 fi
