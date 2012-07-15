@@ -247,14 +247,14 @@ then
       _d_inf "ERROR: No valid incremental basedir found!"; 
    fi
 
-   if [ ! -d "${WORK_DIR}/bkps/${_inc_basedir}" ]; 
+   if [ ! -d "${STOR_DIR}/bkps/${_inc_basedir}" ]; 
    then 
-      _d_inf "ERROR: Incremental basedir ${WORK_DIR}/bkps/${_inc_basedir} does not exist."; 
+      _d_inf "ERROR: Incremental basedir ${STOR_DIR}/bkps/${_inc_basedir} does not exist."; 
    fi
 
-   _ibx_bkp="${_ibx_bkp} --incremental ${_this_bkp} --incremental-basedir  ${WORK_DIR}/bkps/${_inc_basedir}"
+   _ibx_bkp="${_ibx_bkp} --incremental ${_this_bkp} --incremental-basedir  ${STOR_DIR}/bkps/${_inc_basedir}"
    _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${_inc_basedir}','%Y-%m-%d_%H_%i_%s'),'%U')")
-   echo "Running incremental backup from basedir ${WORK_DIR}/bkps/${_inc_basedir}"
+   echo "Running incremental backup from basedir ${STOR_DIR}/bkps/${_inc_basedir}"
 else
    _ibx_bkp="${_ibx_bkp} ${_this_bkp}"
    _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${CURDATE}','%Y-%m-%d_%H_%i_%s'),'%U')")
@@ -313,17 +313,7 @@ if [ -n "$STOR_DIR" ]; then
       _s_inf "WARNING: Failed to copy ${_this_bkp} to ${STOR_DIR}/bkps/"; 
    else
       _s_inf "Deleting previous work backups"
-      rm -rf $(ls|grep -v $CURDATE)
-   # Delete backup on work dir if no apply log is needed
-#   elif [ "$APPLY_LOG" == 0 ]; then
-#      rm -rf $WORK_DIR/bkps/*
-#   # We also delete the previous incremental if the backup has been successful
-#   elif [ "${BKP_TYPE}" == "incr" ]; then 
-#      echo "Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
-#      rm -rf ${WORK_DIR}/bkps/${_inc_basedir}*;
-#   elif [ "${BKP_TYPE}" == "full" ]; then 
-#      echo "Deleting previous work backups `find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs`"
-#      find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs rm -rf 
+      rm -rf $(ls|grep -v P_|grep -v ${CURDATE}|xargs)
    fi
    echo " ... done"
 fi
