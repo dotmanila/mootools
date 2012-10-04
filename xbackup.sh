@@ -9,29 +9,33 @@
 #                                                            #
 ##############################################################
 
+export PATH=/wok/bin/xtrabackup/2.0.0/bin:/opt/percona/server/bin:$PATH
+
 # What type of backup, 'full', 'incr'
 BKP_TYPE=$1
 # If type is incremental, and this options is specified, it will be used as 
 #    incremental basedir instead.
 INC_BSEDIR=$3
 # Base dir, this is where the backup will be stored first before being stored.
-WORK_DIR=/ssd/sb/xbackups/work
+WORK_DIR=/ssd/msb/msb_5_5_230/bkps/work
+#WORK_DIR=/mnt/Backups/database/work
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
 # must exist a bkps and bnlg subdirectories. In absence of a final stor, backups
 # and binlogs will be saved to WORK_DIR
-STOR_DIR=/ssd/sb/xbackups/stor
+STOR_DIR=/ssd/msb/msb_5_5_230/bkps/stor
+#STOR_DIR=/mnt/Backups/database/stor
 
 # If you want to ship the backups to a remote server, specify
 # here the SSH username and password and the remote directory
 # for the backups.
 RMTE_DIR=/ssd/sb/xbackups/rmte
-RMTE_SSH="revin@127.0.0.1"
+#RMTE_SSH="revin@127.0.0.1"
 
 # Where are the MySQL data and binlog directories
-DATADIR=/ssd/sb/msb_5_0_91/data
-BNLGDIR=/ssd/sb/msb_5_0_91/data
+DATADIR=/ssd/msb/msb_5_5_230/data
+BNLGDIR=/ssd/msb/msb_5_5_230/data
 BNLGFMT=mysql-bin
 CURDATE=$2
 # If no CURDATE is given, i.e. not called from xbackup-run.sh
@@ -40,6 +44,9 @@ if [ -z $CURDATE ]; then CURDATE=$(date +%Y-%m-%d_%H_%M_%S); fi
 # Whether to keep a prepared copy, sueful for
 # verification that the backup is good for use
 APPLY_LOG=1
+
+# Whether to compress backups within STOR_DIR
+STOR_CMP=1
 
 LOG_FILE="${WORK_DIR}/bkps/${CURDATE}.log"
 INF_FILE="${WORK_DIR}/bkps/${CURDATE}-info.log"
@@ -53,11 +60,11 @@ STORE=2
 KEEP_LCL=0
 
 # Will be used as --defaults-file for innobackupex if not empty
-DEFAULTS_FILE=/ssd/sb/msb_5_0_91/my.sandbox.cnf
+DEFAULTS_FILE=/ssd/msb/msb_5_5_230/my.sandbox.cnf
 USE_MEMORY=1G
 
 # If defined, backup information will be stored on database.
-MY="/ssd/sb/msb_5_0_91/use percona"
+MY="/ssd/msb/msb_5_5_230/use percona"
 
 # How to flush logs, on versions < 5.5.3, the BINARY clause
 # is not yet supported.
@@ -171,6 +178,20 @@ EOF
    $MY -BNe "${_sql}"
 }
 
+_sql_first_backup_elapsed() {
+   _sql=$(cat <<EOF
+   SELECT 
+      CEIL((UNIX_TIMESTAMP()-UNIX_TIMESTAMP(started_at))/60) AS elapsed  
+   FROM backups 
+   ORDER BY started_at ASC 
+   LIMIT 1
+EOF
+   )
+
+   _sql_log $_sql
+   $MY -BNe "${_sql}"
+}
+
 _sql_save_bkp() {
    _sql=$(cat <<EOF
    INSERT INTO backups 
@@ -221,6 +242,7 @@ if [ -n $DEFAULTS_FILE ]; then _ibx="${_ibx} --defaults-file=${DEFAULTS_FILE}"; 
 
 _ibx_bkp="${_ibx} --no-timestamp"
 _this_bkp="${WORK_DIR}/bkps/${CURDATE}"
+_last_bkp=$(_sql_last_backup)
 
 if [ -n "$STOR_DIR" ]; then _this_stor=$STOR_DIR
 elif [ $KEEP_LCL -eq 1 ]; then _this_stor=$WORK_DIR
@@ -239,7 +261,7 @@ then
 
       _inc_basedir=$INC_BSEDIR
    else
-      _inc_basedir=$(_sql_last_backup)
+      _inc_basedir=$_last_bkp
    fi
 
    if [ ! -n "$_inc_basedir" ]; 
@@ -247,14 +269,14 @@ then
       _d_inf "ERROR: No valid incremental basedir found!"; 
    fi
 
-   if [ ! -d "${STOR_DIR}/bkps/${_inc_basedir}" ]; 
+   if [ ! -d "${WORK_DIR}/bkps/${_inc_basedir}" ]; 
    then 
-      _d_inf "ERROR: Incremental basedir ${STOR_DIR}/bkps/${_inc_basedir} does not exist."; 
+      _d_inf "ERROR: Incremental basedir ${WORK_DIR}/bkps/${_inc_basedir} does not exist."; 
    fi
 
-   _ibx_bkp="${_ibx_bkp} --incremental ${_this_bkp} --incremental-basedir  ${STOR_DIR}/bkps/${_inc_basedir}"
+   _ibx_bkp="${_ibx_bkp} --incremental ${_this_bkp} --incremental-basedir  ${WORK_DIR}/bkps/${_inc_basedir}"
    _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${_inc_basedir}','%Y-%m-%d_%H_%i_%s'),'%U')")
-   echo "Running incremental backup from basedir ${STOR_DIR}/bkps/${_inc_basedir}"
+   echo "Running incremental backup from basedir ${WORK_DIR}/bkps/${_inc_basedir}"
 else
    _ibx_bkp="${_ibx_bkp} ${_this_bkp}"
    _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${CURDATE}','%Y-%m-%d_%H_%i_%s'),'%U')")
@@ -296,24 +318,95 @@ if [ "$RETVAR" -gt 0 ]; then
 fi
 
 # Sync the binary logs to local stor first.
-if [ -n "{$BNLGFMT}" ]; then
-   echo
-   echo "Syncing binary log snapshots"
-   rsync -avzp --delete $BNLGDIR/$BNLGFMT.* $_this_stor/bnlg/
-   echo " ... done"
+echo
+echo "Syncing binary log snapshots"
+#rsync -avzp $BNLGDIR/$BNLGFMT.* $_this_stor/bnlg/
+if [ -n "$_last_bkp" ]; then
+   _first_bkp_since=$(_sql_first_backup_elapsed)
+   > $WORK_DIR/bkps/binlog.index
+
+   echo "Getting a list of binary logs to copy"
+   for f in $(cat $BNLGDIR/$BNLGFMT.index); do 
+      echo $(basename $f) >> $WORK_DIR/bkps/binlog.index
+   done
+   if [ "$STOR_CMP" == 1 ]; then
+      if [ -f "$STOR_DIR/bkps/${_last_bkp}-xtrabackup_binlog_info.log" ]; then
+         _xbinlog_info=$STOR_DIR/bkps/${_last_bkp}-xtrabackup_binlog_info.log
+      elif [ -f "$STOR_DIR/bkps/${_last_bkp}/xtrabackup_binlog_info" ]; then
+         _xbinlog_info=$STOR_DIR/bkps/${_last_bkp}/xtrabackup_binlog_info
+      else
+         _xbinlog_info=
+      fi
+   elif [ -f "$STOR_DIR/bkps/${_last_bkp}/xtrabackup_binlog_info" ]; then
+      _xbinlog_info=$STOR_DIR/bkps/${_last_bkp}/xtrabackup_binlog_info
+   else
+      _xbinlog_info=
+   fi
+
+   if [ -n "$_xbinlog_info" -a -f "$_xbinlog_info" ]; then
+      echo "Found last binlog information $_xbinlog_info"
+
+      _last_binlog=$(cat $_xbinlog_info|awk '{print $1}')
+
+      cd $BNLGDIR
+
+      if [ "$STOR_CMP" == 1 ]; then
+         if [ -f "${_this_stor}/bnlg/${_last_binlog}.tar.gz" ]; then 
+            rm -rf "${_this_stor}/bnlg/${_last_binlog}.tar.gz"; 
+         fi
+         tar czvf "${_this_stor}/bnlg/${_last_binlog}.tar.gz" $_last_binlog
+      else
+         if [ -f "${_this_stor}/bnlg/${_last_binlog}" ]; then 
+            rm -rf "${_this_stor}/bnlg/${_last_binlog}"; 
+         fi
+         cp -v $_last_binlog "${_this_stor}/bnlg/"
+      fi
+
+      for f in $(sed -e "1,/${_last_binlog}/d" $WORK_DIR/bkps/binlog.index); do
+         if [ "$STOR_CMP" == 1 ]; then
+            tar czvf "${_this_stor}/bnlg/${f}.tar.gz" $f
+         else
+            cp -v $f "${_this_stor}/bnlg/"
+         fi
+      done
+
+      if [ -f "${_this_stor}/bnlg/${BNLGFMT}.index" ]; then rm -rf "${_this_stor}/bnlg/${BNLGFMT}.index"; fi
+      cp ${BNLGFMT}.index ${_this_stor}/bnlg/${BNLGFMT}.index
+      cd $WORK_DIR/bkps/
+   fi
+
+   if [ -n "${_first_bkp_since}" -a "${_first_bkp_since}" -gt 0 ]; then
+      echo "Deleting archived binary logs older than ${_first_bkp_since} minutes ago"
+      find ${_this_stor}/bnlg/ -mmin +$_first_bkp_since -exec rm -rf {} \;
+   fi
 fi
+echo " ... done"
 
 # Create copies of the backup if STOR_DIR and RMTE_DIR+RMTE_SSH is
 # specified.
 if [ -n "$STOR_DIR" ]; then
    echo
    echo "Copying to immediate storage ${STOR_DIR}/bkps/"
-   cp -r $_this_bkp* $STOR_DIR/bkps/
+   if [ "$STOR_CMP" == 1 ]; then
+      tar czvf ${STOR_DIR}/bkps/${CURDATE}.tar.gz $CURDATE
+      cp $_this_bkp/xtrabackup_binlog_info $STOR_DIR/bkps/${CURDATE}-xtrabackup_binlog_info.log
+      cp -r $_this_bkp*.log $STOR_DIR/bkps/
+   else
+      cp -r $_this_bkp* $STOR_DIR/bkps/
+   fi
+
    if [ "$?" -gt 0 ]; then 
       _s_inf "WARNING: Failed to copy ${_this_bkp} to ${STOR_DIR}/bkps/"; 
-   else
-      _s_inf "Deleting previous work backups"
-      rm -rf $(ls|grep -v P_|grep -v ${CURDATE}|xargs)
+   # Delete backup on work dir if no apply log is needed
+   elif [ "$APPLY_LOG" == 0 ]; then
+      rm -rf $WORK_DIR/bkps/*
+   # We also delete the previous incremental if the backup has been successful
+   elif [ "${BKP_TYPE}" == "incr" ]; then 
+      echo "Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
+      rm -rf ${WORK_DIR}/bkps/${_inc_basedir}*;
+   elif [ "${BKP_TYPE}" == "full" ]; then 
+      echo "Deleting previous work backups `find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs`"
+      find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs rm -rf 
    fi
    echo " ... done"
 fi
@@ -366,7 +459,7 @@ if [ "$status" != 1 ]; then
       _bu_size=$(_du_r $_this_bkp)
       _du_left=$(_df $WORK_DIR)
       if [ "${_bu_size}" -gt "${_du_left}" ]; then
-         _d_inf "ERROR: Apply to copy was specified, however there is not enough disk space lace on device.";
+         _d_inf "ERROR: Apply to copy was specified, however there is not enough disk space left on device.";
       else
          cp -r ${_this_bkp} ${_apply_to}
       fi
