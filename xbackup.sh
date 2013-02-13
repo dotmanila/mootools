@@ -11,38 +11,43 @@
 
 export PATH=/wok/bin/xtrabackup/2.0.0/bin:/opt/percona/server/bin:$PATH
 
-# What type of backup, 'full', 'incr'
+# Type of backup, accepts 'full' or 'incr'
 BKP_TYPE=$1
 # If type is incremental, and this options is specified, it will be used as 
-#    incremental basedir instead.
+#    --incremental-basedir option for innobackupex.
 INC_BSEDIR=$3
-# Base dir, this is where the backup will be stored first before being stored.
+# Base dir, this is where the backup will be initially saved.
 WORK_DIR=/ssd/msb/msb_5_5_230/bkps/work
-#WORK_DIR=/mnt/Backups/database/work
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
-# must exist a bkps and bnlg subdirectories. In absence of a final stor, backups
+# must exist a 'bkps' and 'bnlg' subdirectories. In absence of a final stor, backups
 # and binlogs will be saved to WORK_DIR
 STOR_DIR=/ssd/msb/msb_5_5_230/bkps/stor
-#STOR_DIR=/mnt/Backups/database/stor
 
 # If you want to ship the backups to a remote server, specify
 # here the SSH username and password and the remote directory
-# for the backups.
+# for the backups. Absence of neither disables remote shipping
+# of backups
 RMTE_DIR=/ssd/sb/xbackups/rmte
 #RMTE_SSH="revin@127.0.0.1"
 
 # Where are the MySQL data and binlog directories
 DATADIR=/ssd/msb/msb_5_5_230/data
 BNLGDIR=/ssd/msb/msb_5_5_230/data
+# log-bin filename format, used when rsyncing binary logs
 BNLGFMT=mysql-bin
+
+# This value should always come from xbackup-run.sh unless
+# for testing purposes
 CURDATE=$2
 # If no CURDATE is given, i.e. not called from xbackup-run.sh
 if [ -z $CURDATE ]; then CURDATE=$(date +%Y-%m-%d_%H_%M_%S); fi
 
 # Whether to keep a prepared copy, sueful for
-# verification that the backup is good for use
+# verification that the backup is good for use.
+# Verification is done on a copy under WORK_DIR and an untouched
+# copy is stored on STOR_DIR
 APPLY_LOG=1
 
 # Whether to compress backups within STOR_DIR
@@ -61,13 +66,17 @@ KEEP_LCL=0
 
 # Will be used as --defaults-file for innobackupex if not empty
 DEFAULTS_FILE=/ssd/msb/msb_5_5_230/my.sandbox.cnf
+# Used as --use-memory option for innobackupex when APPLY_LOG is
+# enabled
 USE_MEMORY=1G
 
-# If defined, backup information will be stored on database.
+# mysql client command line that will give access to the schema
+# and table where backups information will be stored. See
+# backup table structure below.
 MY="/ssd/msb/msb_5_5_230/use percona"
 
 # How to flush logs, on versions < 5.5.3, the BINARY clause
-# is not yet supported.
+# is not yet supported. Not used at the moment.
 FLOGS="${MY} -BNe 'FLUSH BINARY LOGS'"
 
 # Table definition where backup information will be stored.
