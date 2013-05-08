@@ -9,7 +9,20 @@
 #                                                            #
 ##############################################################
 
-export PATH=/wok/bin/xtrabackup/2.0.0/bin:/opt/percona/server/bin:$PATH
+# set this only if you don't have the mysql and xtrabackup binaries in your PATH
+# export PATH=/wok/bin/xtrabackup/2.0.0/bin:/opt/percona/server/bin:$PATH
+
+[ $# -lt 1 ] && {
+cat<<EOF > &2
+   usage: xbackup.sh <type> [ts] [incremental-basedir]
+   Where 
+   <type> is full or incr
+   [ts] is a timestamp to mark the backup with. defaults to $(date +%Y-%m-%d_%H_%M_%S)
+   [incremental-basedir] if <type> is incr, this will be passed to --incremental-basedir 
+EOF
+
+exit 1
+}
 
 # Type of backup, accepts 'full' or 'incr'
 BKP_TYPE=$1
