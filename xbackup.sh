@@ -28,15 +28,15 @@ exit 1
 BKP_TYPE=$1
 # If type is incremental, and this options is specified, it will be used as 
 #    --incremental-basedir option for innobackupex.
-INC_BSEDIR=$3
+INC_BSEDIR=$3$(date +%Y-%m-%d_%H_%M_%S)
 # Base dir, this is where the backup will be initially saved.
-WORK_DIR=/ssd/msb/msb_5_5_230/bkps/work
+WORK_DIR=/backup/
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
 # must exist a 'bkps' and 'bnlg' subdirectories. In absence of a final stor, backups
 # and binlogs will be saved to WORK_DIR
-STOR_DIR=/ssd/msb/msb_5_5_230/bkps/stor
+STOR_DIR=
 
 # If you want to ship the backups to a remote server, specify
 # here the SSH username and password and the remote directory
@@ -46,8 +46,8 @@ RMTE_DIR=/ssd/sb/xbackups/rmte
 #RMTE_SSH="revin@127.0.0.1"
 
 # Where are the MySQL data and binlog directories
-DATADIR=/ssd/msb/msb_5_5_230/data
-BNLGDIR=/ssd/msb/msb_5_5_230/data
+DATADIR=/var/lib/mysql/
+BNLGDIR=/var/lib/mysql
 # log-bin filename format, used when rsyncing binary logs
 BNLGFMT=mysql-bin
 
