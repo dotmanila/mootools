@@ -42,7 +42,7 @@ STOR_DIR=
 # here the SSH username and password and the remote directory
 # for the backups. Absence of neither disables remote shipping
 # of backups
-RMTE_DIR=/ssd/sb/xbackups/rmte
+#RMTE_DIR=/ssd/sb/xbackups/rmte
 #RMTE_SSH="revin@127.0.0.1"
 
 # Where are the MySQL data and binlog directories
@@ -78,7 +78,7 @@ STORE=2
 KEEP_LCL=0
 
 # Will be used as --defaults-file for innobackupex if not empty
-DEFAULTS_FILE=/ssd/msb/msb_5_5_230/my.sandbox.cnf
+DEFAULTS_FILE=
 # Used as --use-memory option for innobackupex when APPLY_LOG is
 # enabled
 USE_MEMORY=1G
@@ -86,7 +86,7 @@ USE_MEMORY=1G
 # mysql client command line that will give access to the schema
 # and table where backups information will be stored. See
 # backup table structure below.
-MY="/ssd/msb/msb_5_5_230/use percona"
+MY="mysql percona"
 
 # How to flush logs, on versions < 5.5.3, the BINARY clause
 # is not yet supported. Not used at the moment.
