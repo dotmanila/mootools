@@ -257,10 +257,12 @@ echo "Backup type: ${BKP_TYPE}" | tee -a $INF_FILE
 _start_backup_date=`date`
 echo "Backup job started: ${_start_backup_date}" | tee -a $INF_FILE
 
+DEFAULTS_FILE_FLAG=
+[ -n "$DEFAULTS_FILE" ] && DEFAULTS_FILE_FLAG="--defaults-file=${DEFAULTS_FILE}"
 # Check for innobackupex
 _ibx=`which innobackupex`
 if [ "$?" -gt 0 ]; then _d_inf "ERROR: Could not find innobackupex binary!"; fi
-if [ -n $DEFAULTS_FILE ]; then _ibx="${_ibx} --defaults-file=${DEFAULTS_FILE}"; fi
+if [ -n $DEFAULTS_FILE ]; then _ibx="${_ibx} ${DEFAULTS_FILE_FLAG}"; fi
 
 _ibx_bkp="${_ibx} --no-timestamp"
 _this_bkp="${WORK_DIR}/bkps/${CURDATE}"
