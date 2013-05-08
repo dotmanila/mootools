@@ -13,7 +13,7 @@
 # export PATH=/wok/bin/xtrabackup/2.0.0/bin:/opt/percona/server/bin:$PATH
 
 [ $# -lt 1 ] && {
-cat<<EOF > &2
+cat<<EOF >&2
    usage: xbackup.sh <type> [ts] [incremental-basedir]
    Where 
    <type> is full or incr
