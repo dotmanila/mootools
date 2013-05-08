@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash 
 
 ##############################################################
 #                                                            #
@@ -16,20 +16,17 @@
 usage()
 {
 cat<<EOF >&2
-   usage: xbackup.sh -t <type> -ts timestamp -i incremental-basedir -b backup-dir -d datadir -l binlogdir
+   usage: xbackup.sh -t <type> -ts timestamp -i incremental-basedir -b backup-dir -d datadir -l binlogdir -f
+
    Only <type> is mandatory, and it can be one of full or incr
    ts is a timestamp to mark the backup with. defaults to $(date +%Y-%m-%d_%H_%M_%S)
    incremental-basedir will be passed to innobackupex as --incremental-basedir, if present and type was incr
    datadir is mysql's datadir, needed if it can't be found on my.cnf or obtained from mysql
    binlogdir is the dir where mysql stores binlogs, needed if it can't be found on my.cnf or obtained from mysql
+   -f will force the script to run, even if a lock file was present
+
 EOF
 
-}
-
-# we need at least on arg, the backup type
-[ $# -lt 1 ] && {
-usage
-exit 1
 }
 
 
@@ -61,10 +58,8 @@ STOR_DIR=
 DATADIR=/var/lib/mysql/
 BNLGDIR=/var/lib/mysql/
 
-   usage: xbackup.sh -t <type> -s timestamp -i incremental-basedir -b backup-dir -d datadir -l binlogdir
 
-
-while  getopts "t:s:i:b:d:l:" OPTION; do 
+while  getopts "t:s:i:b:d:l:f" OPTION; do 
     case $OPTION in 
 	t) 
 	    BKP_TYPE=$OPTARG
@@ -84,6 +79,9 @@ while  getopts "t:s:i:b:d:l:" OPTION; do
 	l)
 	    BNLGDIR=$OPTARG
 	    ;;
+	f)
+	    rm -f /tmp/xbackup.lock
+	    ;;
 	?)
 	usage
 	exit 1
@@ -91,6 +89,12 @@ while  getopts "t:s:i:b:d:l:" OPTION; do
     esac
 done
 
+
+# we need at least on arg, the backup type
+[ $# -lt 1 -o -z "$BKP_TYPE" ] && {
+usage
+exit 1
+}
 
 # log-bin filename format, used when rsyncing binary logs
 BNLGFMT=mysql-bin
