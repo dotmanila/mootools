@@ -12,25 +12,37 @@
 # set this only if you don't have the mysql and xtrabackup binaries in your PATH
 # export PATH=/wok/bin/xtrabackup/2.0.0/bin:/opt/percona/server/bin:$PATH
 
-[ $# -lt 1 ] && {
+# print usage info
+usage()
+{
 cat<<EOF >&2
-   usage: xbackup.sh <type> [ts] [incremental-basedir]
-   Where 
-   <type> is full or incr
-   [ts] is a timestamp to mark the backup with. defaults to $(date +%Y-%m-%d_%H_%M_%S)
-   [incremental-basedir] if <type> is incr, this will be passed to --incremental-basedir 
+   usage: xbackup.sh -t <type> -ts timestamp -i incremental-basedir -b backup-dir -d datadir -l binlogdir
+   Only <type> is mandatory, and it can be one of full or incr
+   ts is a timestamp to mark the backup with. defaults to $(date +%Y-%m-%d_%H_%M_%S)
+   incremental-basedir will be passed to innobackupex as --incremental-basedir, if present and type was incr
+   datadir is mysql's datadir, needed if it can't be found on my.cnf or obtained from mysql
+   binlogdir is the dir where mysql stores binlogs, needed if it can't be found on my.cnf or obtained from mysql
 EOF
 
+}
+
+# we need at least on arg, the backup type
+[ $# -lt 1 ] && {
+usage
 exit 1
 }
 
+
+# timestamp for the backup
+CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
+
 # Type of backup, accepts 'full' or 'incr'
-BKP_TYPE=$1
+BKP_TYPE=
 # If type is incremental, and this options is specified, it will be used as 
 #    --incremental-basedir option for innobackupex.
-INC_BSEDIR=$3$(date +%Y-%m-%d_%H_%M_%S)
+INC_BSEDIR=inc_$CURDATE
 # Base dir, this is where the backup will be initially saved.
-WORK_DIR=/backup/
+WORK_DIR=/backup
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
@@ -47,15 +59,42 @@ STOR_DIR=
 
 # Where are the MySQL data and binlog directories
 DATADIR=/var/lib/mysql/
-BNLGDIR=/var/lib/mysql
+BNLGDIR=/var/lib/mysql/
+
+   usage: xbackup.sh -t <type> -s timestamp -i incremental-basedir -b backup-dir -d datadir -l binlogdir
+
+
+while  getopts "t:s:i:b:d:l:" OPTION; do 
+    case $OPTION in 
+	t) 
+	    BKP_TYPE=$OPTARG
+	    ;;
+	s)
+	    CURDATE=$OPTARG
+	    ;;
+	i)
+	    INC_BSEDIR=$OPTARG
+	    ;;
+	b)
+	    WORK_DIR=$OPTARG
+	    ;;
+	d)
+	    DATADIR=$OPTARG
+	    ;;
+	l)
+	    BNLGDIR=$OPTARG
+	    ;;
+	?)
+	usage
+	exit 1
+	;;
+    esac
+done
+
+
 # log-bin filename format, used when rsyncing binary logs
 BNLGFMT=mysql-bin
 
-# This value should always come from xbackup-run.sh unless
-# for testing purposes
-CURDATE=$2
-# If no CURDATE is given, i.e. not called from xbackup-run.sh
-if [ -z $CURDATE ]; then CURDATE=$(date +%Y-%m-%d_%H_%M_%S); fi
 
 # Whether to keep a prepared copy, sueful for
 # verification that the backup is good for use.
