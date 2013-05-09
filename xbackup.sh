@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash 
 
 ##############################################################
 #                                                            #
@@ -9,46 +9,105 @@
 #                                                            #
 ##############################################################
 
-export PATH=/wok/bin/xtrabackup/2.0.0/bin:/opt/percona/server/bin:$PATH
+# set this only if you don't have the mysql and xtrabackup binaries in your PATH
+# export PATH=/wok/bin/xtrabackup/2.0.0/bin:/opt/percona/server/bin:$PATH
+
+# print usage info
+usage()
+{
+cat<<EOF >&2
+   usage: xbackup.sh -t <type> -ts timestamp -i incremental-basedir -b backup-dir -d datadir -f -l binlogs
+
+   Only <type> is mandatory, and it can be one of full or incr
+
+   ts is a timestamp to mark the backup with. defaults to $(date +%Y-%m-%d_%H_%M_%S)
+   incremental-basedir will be passed to innobackupex as --incremental-basedir, if present and type was incr. defaults to the last backup taken
+   datadir is mysql's datadir, needed if it can't be found on my.cnf or obtained from mysql
+   -f will force the script to run, even if a lock file was present
+   binlogs is the binlgo directory. if this option is set, binlogs will be copied with the backup. by default, they are not. 
+
+EOF
+
+}
+
+
+# timestamp for the backup
+CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
 
 # Type of backup, accepts 'full' or 'incr'
-BKP_TYPE=$1
+BKP_TYPE=
 # If type is incremental, and this options is specified, it will be used as 
 #    --incremental-basedir option for innobackupex.
-INC_BSEDIR=$3
+INC_BSEDIR=
 # Base dir, this is where the backup will be initially saved.
-WORK_DIR=/ssd/msb/msb_5_5_230/bkps/work
+WORK_DIR=/backup
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
 # must exist a 'bkps' and 'bnlg' subdirectories. In absence of a final stor, backups
 # and binlogs will be saved to WORK_DIR
-STOR_DIR=/ssd/msb/msb_5_5_230/bkps/stor
+STOR_DIR=
 
 # If you want to ship the backups to a remote server, specify
 # here the SSH username and password and the remote directory
 # for the backups. Absence of neither disables remote shipping
 # of backups
-RMTE_DIR=/ssd/sb/xbackups/rmte
+#RMTE_DIR=/ssd/sb/xbackups/rmte
 #RMTE_SSH="revin@127.0.0.1"
 
 # Where are the MySQL data and binlog directories
-DATADIR=/ssd/msb/msb_5_5_230/data
-BNLGDIR=/ssd/msb/msb_5_5_230/data
+DATADIR=/var/lib/mysql/
+BNLGDIR=/var/lib/mysql/
+COPY_BINLOGS=0
+
+
+while  getopts "t:s:i:b:d:l:f" OPTION; do 
+    case $OPTION in 
+	t) 
+	    BKP_TYPE=$OPTARG
+	    ;;
+	s)
+	    CURDATE=$OPTARG
+	    ;;
+	i)
+	    INC_BSEDIR=$OPTARG
+	    ;;
+	b)
+	    WORK_DIR=$OPTARG
+	    ;;
+	d)
+	    DATADIR=$OPTARG
+	    ;;
+	l)
+	    BNLGDIR=$OPTARG
+	    COPY_BINLOGS=1
+	    ;;
+	f)
+	    rm -f /tmp/xbackup.lock
+	    ;;
+	?)
+	usage
+	exit 1
+	;;
+    esac
+done
+
+
+# we need at least on arg, the backup type
+[ $# -lt 1 -o -z "$BKP_TYPE" ] && {
+usage
+exit 1
+}
+
 # log-bin filename format, used when rsyncing binary logs
 BNLGFMT=mysql-bin
 
-# This value should always come from xbackup-run.sh unless
-# for testing purposes
-CURDATE=$2
-# If no CURDATE is given, i.e. not called from xbackup-run.sh
-if [ -z $CURDATE ]; then CURDATE=$(date +%Y-%m-%d_%H_%M_%S); fi
 
 # Whether to keep a prepared copy, sueful for
 # verification that the backup is good for use.
 # Verification is done on a copy under WORK_DIR and an untouched
 # copy is stored on STOR_DIR
-APPLY_LOG=1
+APPLY_LOG=0
 
 # Whether to compress backups within STOR_DIR
 STOR_CMP=1
@@ -65,7 +124,7 @@ STORE=2
 KEEP_LCL=0
 
 # Will be used as --defaults-file for innobackupex if not empty
-DEFAULTS_FILE=/ssd/msb/msb_5_5_230/my.sandbox.cnf
+DEFAULTS_FILE=
 # Used as --use-memory option for innobackupex when APPLY_LOG is
 # enabled
 USE_MEMORY=1G
@@ -73,7 +132,7 @@ USE_MEMORY=1G
 # mysql client command line that will give access to the schema
 # and table where backups information will be stored. See
 # backup table structure below.
-MY="/ssd/msb/msb_5_5_230/use percona"
+MY="mysql percona"
 
 # How to flush logs, on versions < 5.5.3, the BINARY clause
 # is not yet supported. Not used at the moment.
@@ -244,10 +303,12 @@ echo "Backup type: ${BKP_TYPE}" | tee -a $INF_FILE
 _start_backup_date=`date`
 echo "Backup job started: ${_start_backup_date}" | tee -a $INF_FILE
 
+DEFAULTS_FILE_FLAG=
+[ -n "$DEFAULTS_FILE" ] && DEFAULTS_FILE_FLAG="--defaults-file=${DEFAULTS_FILE}"
 # Check for innobackupex
 _ibx=`which innobackupex`
 if [ "$?" -gt 0 ]; then _d_inf "ERROR: Could not find innobackupex binary!"; fi
-if [ -n $DEFAULTS_FILE ]; then _ibx="${_ibx} --defaults-file=${DEFAULTS_FILE}"; fi
+if [ -n $DEFAULTS_FILE ]; then _ibx="${_ibx} ${DEFAULTS_FILE_FLAG}"; fi
 
 _ibx_bkp="${_ibx} --no-timestamp"
 _this_bkp="${WORK_DIR}/bkps/${CURDATE}"
@@ -326,6 +387,7 @@ if [ "$RETVAR" -gt 0 ]; then
    _d_inf "ERROR: non-zero exit status of xtrabackup during backup. Something may have failed!"; 
 fi
 
+if [ $COPY_BINLOGS -eq 1 ]; then
 # Sync the binary logs to local stor first.
 echo
 echo "Syncing binary log snapshots"
@@ -390,6 +452,7 @@ if [ -n "$_last_bkp" ]; then
    fi
 fi
 echo " ... done"
+fi
 
 # Create copies of the backup if STOR_DIR and RMTE_DIR+RMTE_SSH is
 # specified.
@@ -486,10 +549,13 @@ echo
 echo "Apply log finished: ${_end_prepare_date}" | tee -a "${INF_FILE}"
 echo
 
+CAN_REMOVE_UNPREPARED=0
 # Check the exit status from innobackupex, but dont exit right 
 # away if it failed
 if [ "$RETVAR" -gt 0 ]; then
    _d_inf "ERROR: non-zero exit status of xtrabackup during --apply-log. Something may have failed! Please prepare, I have not deleted the new backup directory.";
+else
+    CAN_REMOVE_UNPREPARED=1
 fi
 
 # End, whether apply log is enabled
@@ -526,6 +592,10 @@ echo "Backup size: ${_bu_size}" | tee -a "${INF_FILE}"
 echo "Remaining space on backup on device: ${_du_left}" | tee -a "${INF_FILE}"
 echo "Logfile: ${LOG_FILE}" | tee -a "${INF_FILE}"
 echo
+
+#if [ $CAN_REMOVE_UNPREPARED -eq 1 ]; then
+#    rm -rf ${_this_bkp}
+#fi
 
 rm -rf /tmp/xbackup.lock
 
