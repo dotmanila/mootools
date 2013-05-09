@@ -38,7 +38,7 @@ CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
 BKP_TYPE=
 # If type is incremental, and this options is specified, it will be used as 
 #    --incremental-basedir option for innobackupex.
-INC_BSEDIR=inc_$CURDATE
+INC_BSEDIR=
 # Base dir, this is where the backup will be initially saved.
 WORK_DIR=/backup
 # This is where the backups will be stored after verification. If this is empty
@@ -593,9 +593,9 @@ echo "Remaining space on backup on device: ${_du_left}" | tee -a "${INF_FILE}"
 echo "Logfile: ${LOG_FILE}" | tee -a "${INF_FILE}"
 echo
 
-if [ $CAN_REMOVE_UNPREPARED -eq 1 ]; then
-    rm -rf ${_this_bkp}
-fi
+#if [ $CAN_REMOVE_UNPREPARED -eq 1 ]; then
+#    rm -rf ${_this_bkp}
+#fi
 
 rm -rf /tmp/xbackup.lock
 
