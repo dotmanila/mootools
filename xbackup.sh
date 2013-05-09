@@ -549,12 +549,13 @@ echo
 echo "Apply log finished: ${_end_prepare_date}" | tee -a "${INF_FILE}"
 echo
 
+CAN_REMOVE_UNPREPARED=0
 # Check the exit status from innobackupex, but dont exit right 
 # away if it failed
 if [ "$RETVAR" -gt 0 ]; then
    _d_inf "ERROR: non-zero exit status of xtrabackup during --apply-log. Something may have failed! Please prepare, I have not deleted the new backup directory.";
 else
-    rm -rf ${_this_bkp}
+    CAN_REMOVE_UNPREPARED=1
 fi
 
 # End, whether apply log is enabled
@@ -591,6 +592,10 @@ echo "Backup size: ${_bu_size}" | tee -a "${INF_FILE}"
 echo "Remaining space on backup on device: ${_du_left}" | tee -a "${INF_FILE}"
 echo "Logfile: ${LOG_FILE}" | tee -a "${INF_FILE}"
 echo
+
+if [ $CAN_REMOVE_UNPREPARED -eq 1 ]; then
+    rm -rf ${_this_bkp}
+fi
 
 rm -rf /tmp/xbackup.lock
 
