@@ -1,0 +1,40 @@
+# xbackup.sh
+
+Wrapper for Percona Xtrabackup
+
+---
+
+
+## Requirements: 
+- percona xtrabackup
+- mysql/compatible server (to backup)
+- mysql/compatible server (to store backup metadata)
+
+
+## Configuration: 
+- WORKDIR (line 43) must be set to the root of the directory you want backups to be saved. 
+- MY (line 135) must be set to the command line needed to access the metadata server (i.e. "mysql -uuser -ppass -hhost schema-name")
+- The following table must exist in the schema specified in the MY variable: 
+CREATE TABLE backups (
+  id int(10) unsigned NOT NULL auto_increment,
+  started_at timestamp NOT NULL default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP,
+  ends_at timestamp NOT NULL default '0000-00-00 00:00:00',
+  size varchar(15) default NULL,
+  path varchar(120) default NULL,
+  type enum('full','incr') NOT NULL default 'full',
+  incrbase timestamp NOT NULL default '0000-00-00 00:00:00',
+  weekno tinyint(3) unsigned NOT NULL default '0',
+  baseid int(10) unsigned NOT NULL default '0',
+  PRIMARY KEY  (`id`)
+) ENGINE=InnoDB;
+
+## Usage
+
+### Full backup
+./xbackup.sh -t full
+
+### Incremental backup
+./backup.sh -t incr
+
+
+ 
