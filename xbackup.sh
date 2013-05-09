@@ -16,14 +16,15 @@
 usage()
 {
 cat<<EOF >&2
-   usage: xbackup.sh -t <type> -ts timestamp -i incremental-basedir -b backup-dir -d datadir -l binlogdir -f
+   usage: xbackup.sh -t <type> -ts timestamp -i incremental-basedir -b backup-dir -d datadir -f -l binlogs
 
    Only <type> is mandatory, and it can be one of full or incr
+
    ts is a timestamp to mark the backup with. defaults to $(date +%Y-%m-%d_%H_%M_%S)
-   incremental-basedir will be passed to innobackupex as --incremental-basedir, if present and type was incr
+   incremental-basedir will be passed to innobackupex as --incremental-basedir, if present and type was incr. defaults to the last backup taken
    datadir is mysql's datadir, needed if it can't be found on my.cnf or obtained from mysql
-   binlogdir is the dir where mysql stores binlogs, needed if it can't be found on my.cnf or obtained from mysql
    -f will force the script to run, even if a lock file was present
+   binlogs is the binlgo directory. if this option is set, binlogs will be copied with the backup. by default, they are not. 
 
 EOF
 
@@ -57,6 +58,7 @@ STOR_DIR=
 # Where are the MySQL data and binlog directories
 DATADIR=/var/lib/mysql/
 BNLGDIR=/var/lib/mysql/
+COPY_BINLOGS=0
 
 
 while  getopts "t:s:i:b:d:l:f" OPTION; do 
@@ -78,6 +80,7 @@ while  getopts "t:s:i:b:d:l:f" OPTION; do
 	    ;;
 	l)
 	    BNLGDIR=$OPTARG
+	    COPY_BINLOGS=1
 	    ;;
 	f)
 	    rm -f /tmp/xbackup.lock
@@ -384,6 +387,7 @@ if [ "$RETVAR" -gt 0 ]; then
    _d_inf "ERROR: non-zero exit status of xtrabackup during backup. Something may have failed!"; 
 fi
 
+if [ $COPY_BINLOGS -eq 1 ]; then
 # Sync the binary logs to local stor first.
 echo
 echo "Syncing binary log snapshots"
@@ -448,6 +452,7 @@ if [ -n "$_last_bkp" ]; then
    fi
 fi
 echo " ... done"
+fi
 
 # Create copies of the backup if STOR_DIR and RMTE_DIR+RMTE_SSH is
 # specified.
@@ -548,6 +553,8 @@ echo
 # away if it failed
 if [ "$RETVAR" -gt 0 ]; then
    _d_inf "ERROR: non-zero exit status of xtrabackup during --apply-log. Something may have failed! Please prepare, I have not deleted the new backup directory.";
+else
+    rm -rf ${_this_bkp}
 fi
 
 # End, whether apply log is enabled
