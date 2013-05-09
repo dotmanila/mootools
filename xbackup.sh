@@ -107,7 +107,7 @@ BNLGFMT=mysql-bin
 # verification that the backup is good for use.
 # Verification is done on a copy under WORK_DIR and an untouched
 # copy is stored on STOR_DIR
-APPLY_LOG=1
+APPLY_LOG=0
 
 # Whether to compress backups within STOR_DIR
 STOR_CMP=1
