@@ -30,8 +30,7 @@ EOF
 
 }
 
-
-# timestamp for the backup
+# Timestamp for the backup, if not called from xbackup-run.sh
 CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
 
 # Type of backup, accepts 'full' or 'incr'
@@ -40,13 +39,13 @@ BKP_TYPE=
 #    --incremental-basedir option for innobackupex.
 INC_BSEDIR=
 # Base dir, this is where the backup will be initially saved.
-WORK_DIR=/backup
+WORK_DIR=/root/bkp/work
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
 # must exist a 'bkps' and 'bnlg' subdirectories. In absence of a final stor, backups
 # and binlogs will be saved to WORK_DIR
-STOR_DIR=
+STOR_DIR=/root/bkp/stor
 
 # If you want to ship the backups to a remote server, specify
 # here the SSH username and password and the remote directory
@@ -58,8 +57,10 @@ STOR_DIR=
 # Where are the MySQL data and binlog directories
 DATADIR=/var/lib/mysql/
 BNLGDIR=/var/lib/mysql/
-COPY_BINLOGS=0
-
+# Include binary logs for each backup. Binary logs are incrementally
+# collected to $STOR_DIR/bnlg. The amount of binlog kept depends on
+# the oldest backup that exists
+COPY_BINLOGS=1
 
 while  getopts "t:s:i:b:d:l:f" OPTION; do 
     case $OPTION in 
@@ -92,28 +93,27 @@ while  getopts "t:s:i:b:d:l:f" OPTION; do
     esac
 done
 
+# We need at least on arg, the backup type
+[ $# -lt 1 -o -z "$BKP_TYPE" ] && { usage; exit 1; }
 
-# we need at least on arg, the backup type
-[ $# -lt 1 -o -z "$BKP_TYPE" ] && {
-usage
-exit 1
-}
-
-# log-bin filename format, used when rsyncing binary logs
+# log-bin filename format, used when copying binary logs
 BNLGFMT=mysql-bin
-
 
 # Whether to keep a prepared copy, sueful for
 # verification that the backup is good for use.
 # Verification is done on a copy under WORK_DIR and an untouched
 # copy is stored on STOR_DIR
-APPLY_LOG=0
+APPLY_LOG=1
 
 # Whether to compress backups within STOR_DIR
-STOR_CMP=1
+STOR_CMP=0
 
+# When backing up from a Galera/XtraDB cluster node
+GALERA_INFO=1
+
+INF_FILE_STOR="${STOR_DIR}/bkps/${CURDATE}-info.log"
 LOG_FILE="${WORK_DIR}/bkps/${CURDATE}.log"
-INF_FILE="${WORK_DIR}/bkps/${CURDATE}-info.log"
+INF_FILE_WORK="${WORK_DIR}/bkps/${CURDATE}-info.log"
 
 # How many backup sets do you want to keep, these are the
 # count of full backups plus their incrementals. 
@@ -176,18 +176,22 @@ _du_h() {
 }
 
 _s_inf() {
-   echo $1 | tee -a $INF_FILE
+   echo "$(date +%Y-%m-%d_%H_%M_%S) xbackup $1" | tee -a $INF_FILE_WORK
+}
+
+_echo() {
+   echo "$(date +%Y-%m-%d_%H_%M_%S) xbackup $1"
 }
 
 _d_inf() {
-   echo $1 | tee -a $INF_FILE
+   echo "$(date +%Y-%m-%d_%H_%M_%S) xbackup $1" | tee -a $INF_FILE_WORK
    exit 1
 }
 
-_sql_log() {
-   echo '' > $LOG_FILE
-}
-
+# 
+# Returns a list of full backups (old ones > $STORE) whose
+#   set we will prune later
+#
 _sql_prune_base() {
    _sql=$(cat <<EOF
    SELECT COALESCE(GROUP_CONCAT(id SEPARATOR ','),'') 
@@ -201,10 +205,12 @@ _sql_prune_base() {
 EOF
    )
 
-   _sql_log $_sql
    $MY -BNe "${_sql}"
 }
 
+#
+# Returns a list of backups based on ids of full backups
+#
 _sql_prune_list() {
    _sql=$(cat <<EOF
       SELECT 
@@ -216,10 +222,12 @@ _sql_prune_list() {
 EOF
    )
 
-   _sql_log $_sql
    $MY -BNe "${_sql}"
 }
 
+#
+# When deleting old backups
+#
 _sql_prune_rows() {
    _sql=$(cat <<EOF
    DELETE FROM backups 
@@ -228,10 +236,13 @@ _sql_prune_rows() {
 EOF
    )
 
-   _sql_log $_sql
    $MY -BNe "${_sql}"
 }
 
+# 
+# When doing incremental backups, the results
+#   will be used for out --incremental-dir
+#
 _sql_last_backup() {
    _sql=$(cat <<EOF
    SELECT 
@@ -242,10 +253,14 @@ _sql_last_backup() {
 EOF
    )
 
-   _sql_log $_sql
    $MY -BNe "${_sql}"
 }
 
+# 
+# When COPY_BINLOGS is enabled, we determine what was our
+#   oldest backups, from this we can determine how far back
+#   we should keep a copy of the binary logs
+#
 _sql_first_backup_elapsed() {
    _sql=$(cat <<EOF
    SELECT 
@@ -256,10 +271,12 @@ _sql_first_backup_elapsed() {
 EOF
    )
 
-   _sql_log $_sql
    $MY -BNe "${_sql}"
 }
 
+#
+# Save backup information info percona.backups
+#
 _sql_save_bkp() {
    _sql=$(cat <<EOF
    INSERT INTO backups 
@@ -272,10 +289,14 @@ _sql_save_bkp() {
 EOF
    )
 
-   _sql_log $_sql
    $MY -BNe "${_sql}"
 }
 
+# 
+# When taking incremental backup, we check from
+#   percona.backups what will be our
+#   --incremental-basedir
+#
 _sql_incr_bsedir() {
    _sql=$(cat <<EOF
    SELECT 
@@ -288,20 +309,25 @@ _sql_incr_bsedir() {
 EOF
       )
 
-   _sql_log $_sql
    $MY -BNe "${_sql}"
 }
 
 if [ -f /tmp/xbackup.lock ]; then 
-   _d_inf "ERROR: Another backup is still running or a previous backup failed, please investigate!"; 
+   _d_inf "ERROR: Another backup is still running or a previous \
+      backup failed, please investigate!"; 
 fi
 touch /tmp/xbackup.lock
 
 if [ ! -n "${BKP_TYPE}" ]; then _d_inf "ERROR: No backup type specified!"; fi
-echo "Backup type: ${BKP_TYPE}" | tee -a $INF_FILE
+_s_inf "INFO: Backup type: ${BKP_TYPE}"
+
+[ ! -d "${STOR_DIR}/bnlg" ] && [ "x$COPY_BINLOGS" == "x1" ] && \
+   mkdir -p "${STOR_DIR}/bnlg" && \
+   _d_inf "ERROR: ${STOR_DIR}/bnlg does no exist and cannot be created \
+      automatically!"
 
 _start_backup_date=`date`
-echo "Backup job started: ${_start_backup_date}" | tee -a $INF_FILE
+_s_inf "INFO: Backup job started: ${_start_backup_date}"
 
 DEFAULTS_FILE_FLAG=
 [ -n "$DEFAULTS_FILE" ] && DEFAULTS_FILE_FLAG="--defaults-file=${DEFAULTS_FILE}"
@@ -309,9 +335,11 @@ DEFAULTS_FILE_FLAG=
 _ibx=`which innobackupex`
 if [ "$?" -gt 0 ]; then _d_inf "ERROR: Could not find innobackupex binary!"; fi
 if [ -n $DEFAULTS_FILE ]; then _ibx="${_ibx} ${DEFAULTS_FILE_FLAG}"; fi
+if [ "x$GALERA_INFO" == "x1" ]; then _ibx="${_ibx} --galera-info"; fi
 
 _ibx_bkp="${_ibx} --no-timestamp"
 _this_bkp="${WORK_DIR}/bkps/${CURDATE}"
+_this_bkp_stored="${STOR_DIR}/bkps/${CURDATE}"
 _last_bkp=$(_sql_last_backup)
 
 if [ -n "$STOR_DIR" ]; then _this_stor=$STOR_DIR
@@ -319,7 +347,9 @@ elif [ $KEEP_LCL -eq 1 ]; then _this_stor=$WORK_DIR
 else _this_stor=''
 fi
 
+#
 # Determine what will be our --incremental-basedir
+#
 if [ "${BKP_TYPE}" == "incr" ];
 then
    if [ -n "${INC_BSEDIR}" ]; 
@@ -339,18 +369,22 @@ then
       _d_inf "ERROR: No valid incremental basedir found!"; 
    fi
 
-   if [ ! -d "${WORK_DIR}/bkps/${_inc_basedir}" ]; 
+   [ "x$APPLY_LOG" == "x1" ] && \
+      _inc_basedir_path="${WORK_DIR}/bkps/${_inc_basedir}" || \
+      _inc_basedir_path="${STOR_DIR}/bkps/${_inc_basedir}"
+
+   if [ ! -d "${_inc_basedir_path}" ]; 
    then 
-      _d_inf "ERROR: Incremental basedir ${WORK_DIR}/bkps/${_inc_basedir} does not exist."; 
+      _d_inf "ERROR: Incremental basedir ${_inc_basedir_path} does not exist."; 
    fi
 
-   _ibx_bkp="${_ibx_bkp} --incremental ${_this_bkp} --incremental-basedir  ${WORK_DIR}/bkps/${_inc_basedir}"
+   _ibx_bkp="${_ibx_bkp} --incremental ${_this_bkp} --incremental-basedir ${_inc_basedir_path}"
    _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${_inc_basedir}','%Y-%m-%d_%H_%i_%s'),'%U')")
-   echo "Running incremental backup from basedir ${WORK_DIR}/bkps/${_inc_basedir}"
+   _echo "INFO: Running incremental backup from basedir ${_inc_basedir_path}"
 else
    _ibx_bkp="${_ibx_bkp} ${_this_bkp}"
    _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${CURDATE}','%Y-%m-%d_%H_%i_%s'),'%U')")
-   echo "Running full backup ${_this_bkp}"
+   _echo "INFO: Running full backup ${_this_bkp}"
 fi
 
 # Check for work directory
@@ -361,25 +395,25 @@ DISKSPCE=$(_df $WORK_DIR)
 HASSPACE=`echo "${DATASIZE} ${DISKSPCE}"|awk '{if($1 < $2) {print 1} else {print 0}}'`
 NOSPACE=0
 
-echo "Checking disk space ... (data: $DATASIZE) (disk: $DISKSPCE)"
-if [ "$HASSPACE" -eq "$NOSPACE" ]; then echo "WARNING: Insufficient space on backup directory"; exit 1; fi
+_echo "INFO: Checking disk space ... (data: $DATASIZE) (disk: $DISKSPCE)"
+[ "$HASSPACE" -eq "$NOSPACE" ] && _d_inf "ERROR: Insufficient space on backup directory!"
 
 echo
-echo "Xtrabackup started: `date`" | tee -a "${INF_FILE}"
+_s_inf "INFO: Xtrabackup started: `date`"
 echo
 
 # Keep track if any errors happen
 _status=0
 
-#Llet's create the backup
+#Let's create the backup
 cd $WORK_DIR/bkps/
-echo "Backing up with: $_ibx_bkp"
+_s_inf "INFO: Backing up with: $_ibx_bkp"
 $_ibx_bkp
 RETVAR=$?
 
 _end_backup_date=`date`
 echo 
-echo "Xtrabackup finished: ${_end_backup_date}" | tee -a "${INF_FILE}"
+_s_inf "INFO: Xtrabackup finished: ${_end_backup_date}"
 echo
 
 # Check the exit status from innobackupex, but dont exit right away if it failed
@@ -390,16 +424,16 @@ fi
 if [ $COPY_BINLOGS -eq 1 ]; then
 # Sync the binary logs to local stor first.
 echo
-echo "Syncing binary log snapshots"
-#rsync -avzp $BNLGDIR/$BNLGFMT.* $_this_stor/bnlg/
+_echo "INFO: Syncing binary log snapshots"
 if [ -n "$_last_bkp" ]; then
    _first_bkp_since=$(_sql_first_backup_elapsed)
    > $WORK_DIR/bkps/binlog.index
 
-   echo "Getting a list of binary logs to copy"
+   _echo "INFO: Getting a list of binary logs to copy"
    for f in $(cat $BNLGDIR/$BNLGFMT.index); do 
       echo $(basename $f) >> $WORK_DIR/bkps/binlog.index
    done
+
    if [ "$STOR_CMP" == 1 ]; then
       if [ -f "$STOR_DIR/bkps/${_last_bkp}-xtrabackup_binlog_info.log" ]; then
          _xbinlog_info=$STOR_DIR/bkps/${_last_bkp}-xtrabackup_binlog_info.log
@@ -414,8 +448,10 @@ if [ -n "$_last_bkp" ]; then
       _xbinlog_info=
    fi
 
+   _s_inf "INFO: binlog information at ${_xbinlog_info}"
+
    if [ -n "$_xbinlog_info" -a -f "$_xbinlog_info" ]; then
-      echo "Found last binlog information $_xbinlog_info"
+      _echo "INFO: Found last binlog information $_xbinlog_info"
 
       _last_binlog=$(cat $_xbinlog_info|awk '{print $1}')
 
@@ -447,22 +483,22 @@ if [ -n "$_last_bkp" ]; then
    fi
 
    if [ -n "${_first_bkp_since}" -a "${_first_bkp_since}" -gt 0 ]; then
-      echo "Deleting archived binary logs older than ${_first_bkp_since} minutes ago"
+      _echo "INFO: Deleting archived binary logs older than ${_first_bkp_since} minutes ago"
       find ${_this_stor}/bnlg/ -mmin +$_first_bkp_since -exec rm -rf {} \;
    fi
 fi
-echo " ... done"
+_echo " ... done"
 fi
-
+#
 # Create copies of the backup if STOR_DIR and RMTE_DIR+RMTE_SSH is
-# specified.
+#   specified.
+#
 if [ -n "$STOR_DIR" ]; then
    echo
-   echo "Copying to immediate storage ${STOR_DIR}/bkps/"
+   _echo "INFO: Copying to immediate storage ${STOR_DIR}/bkps/"
    if [ "$STOR_CMP" == 1 ]; then
       tar czvf ${STOR_DIR}/bkps/${CURDATE}.tar.gz $CURDATE
       cp $_this_bkp/xtrabackup_binlog_info $STOR_DIR/bkps/${CURDATE}-xtrabackup_binlog_info.log
-      cp -r $_this_bkp*.log $STOR_DIR/bkps/
    else
       cp -r $_this_bkp* $STOR_DIR/bkps/
    fi
@@ -471,24 +507,25 @@ if [ -n "$STOR_DIR" ]; then
       _s_inf "WARNING: Failed to copy ${_this_bkp} to ${STOR_DIR}/bkps/"; 
    # Delete backup on work dir if no apply log is needed
    elif [ "$APPLY_LOG" == 0 ]; then
-      rm -rf $WORK_DIR/bkps/*
+      cd $WORK_DIR/bkps/
+      rm -rf $(ls|grep -v ${CURDATE}*.log|xargs)
    # We also delete the previous incremental if the backup has been successful
    elif [ "${BKP_TYPE}" == "incr" ]; then 
-      echo "Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
+      _echo "INFO: Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
       rm -rf ${WORK_DIR}/bkps/${_inc_basedir}*;
    elif [ "${BKP_TYPE}" == "full" ]; then 
-      echo "Deleting previous work backups `find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs`"
+      _echo "INFO: Deleting previous work backups `find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs`"
       find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs rm -rf 
    fi
-   echo " ... done"
+   _echo " ... done"
 fi
 
 if [[ -n "$RMTE_DIR" && -n "$RMTE_SSH" ]]; then
    echo
-   echo "Syncing backup sets to remote $RMTE_SSH:$RMTE_DIR/"
+   _echo "INFO: Syncing backup sets to remote $RMTE_SSH:$RMTE_DIR/"
    rsync -avzp --delete -e ssh $STOR_DIR/ $RMTE_SSH:$RMTE_DIR/
    if [ "$?" -gt 0 ]; then _s_inf "WARNING: Failed to sync ${STOR_DIR} to $RMTE_SSH:$RMTE_DIR/"; fi
-   echo " ... done"
+   _echo " ... done"
 fi
 
 if [ "${BKP_TYPE}" == "incr" ]; then
@@ -508,7 +545,7 @@ if [ -n "${USE_MEMORY}" ]; then _ibx_prep="$_ibx --use-memory=$USE_MEMORY"; fi
 
 if [ "$status" != 1 ]; then
    _start_prepare_date=`date`
-   echo "Apply log started: ${_start_prepare_date}" | tee -a "${INF_FILE}"
+   _s_inf "INFO: Apply log started: ${_start_prepare_date}"
 
    if [ "${BKP_TYPE}" == "incr" ];
    then 
@@ -524,7 +561,8 @@ if [ "$status" != 1 ]; then
          _d_inf "ERROR: Base backup ${WORK_DIR}/bkps/${_incr_base} does not exist.";
       fi
       _ibx_prep="${_ibx_prep} --apply-log ${WORK_DIR}/bkps/${_incr_base} --incremental-dir  ${_this_bkp}"
-      echo "Preparing incremental backup with ${_ibx_prep}"
+      _echo "INFO: Preparing incremental backup with ${_ibx_prep}"
+      _last_full_prep=${WORK_DIR}/bkps/${_incr_base}/
    else
       _apply_to="${WORK_DIR}/bkps/P_${CURDATE}"
       # Check to make sure we have enough disk space to make a copy
@@ -537,7 +575,8 @@ if [ "$status" != 1 ]; then
       fi
 
       _ibx_prep="${_ibx_prep} --apply-log --redo-only ${_apply_to}"
-      echo "Preparing base backup with ${_ibx_prep}"
+      _echo "INFO: Preparing base backup with ${_ibx_prep}"
+      _last_full_prep=${WORK_DIR}/bkps/P_${CURDATE}/
    fi
 
    $_ibx_prep
@@ -546,14 +585,16 @@ fi
 
 _end_prepare_date=`date`
 echo
-echo "Apply log finished: ${_end_prepare_date}" | tee -a "${INF_FILE}"
+_s_inf "INFO: Apply log finished: ${_end_prepare_date}"
 echo
 
 CAN_REMOVE_UNPREPARED=0
 # Check the exit status from innobackupex, but dont exit right 
 # away if it failed
 if [ "$RETVAR" -gt 0 ]; then
-   _d_inf "ERROR: non-zero exit status of xtrabackup during --apply-log. Something may have failed! Please prepare, I have not deleted the new backup directory.";
+   _s_inf "ERROR: non-zero exit status of xtrabackup during --apply-log. \
+      Something may have failed! Please prepare, I have not deleted the \
+      new backup directory.";
 else
     CAN_REMOVE_UNPREPARED=1
 fi
@@ -568,29 +609,39 @@ else
    _ends_at=`date -d "${_end_backup_date}" "+%Y-%m-%d %H:%M:%S"`
 fi
 _incr_basedir="STR_TO_DATE('${_incr_basedir}','%Y-%m-%d_%H_%i_%s')"
-_bu_size=$(_du_h ${_this_bkp})
+[ -d "${_this_bkp}" ] && _bu_size=$(_du_h ${_this_bkp}) || _bu_size=$(_du_h ${_this_bkp_stored})
 _du_left=$(_df_h $WORK_DIR)
 
-_sql_save_bkp "${_started_at}" "${_ends_at}" "${_bu_size}" "${STOR_DIR}/bkps/${CURDATE}" "${_incr_basedir}" "${_week_no}" "${_incr_baseid}"
+_sql_save_bkp "${_started_at}" "${_ends_at}" "${_bu_size}" \
+   "${STOR_DIR}/bkps/${CURDATE}" "${_incr_basedir}" \
+   "${_week_no}" "${_incr_baseid}"
 
-echo "Cleaning up previous backup files:"
+_echo "INFO: Cleaning up previous backup files:"
 # Depending on how many sets to keep, we query the backups table.
 # Find the ids of base backups first.
 _prune_base=$(_sql_prune_base)
 if [ -n "$_prune_base" ]; then
    _prune_list=$(_sql_prune_list $_prune_base)
    if [ -n "$_prune_list" ]; then
-      echo "Deleting backups: ${_prune_list}"
+      _echo "INFO: Deleting backups: ${_prune_list}"
       _sql_prune_rows $_prune_base
       cd $STOR_DIR/bkps && rm -rf $_prune_list
    fi
 fi
-echo " ... done"
+_echo " ... done"
 echo
 
-echo "Backup size: ${_bu_size}" | tee -a "${INF_FILE}"
-echo "Remaining space on backup on device: ${_du_left}" | tee -a "${INF_FILE}"
-echo "Logfile: ${LOG_FILE}" | tee -a "${INF_FILE}"
+_end_backup_date=`date`
+echo
+_s_inf "INFO: Backup job finished: ${_end_backup_date}"
+echo
+
+_s_inf "INFO: Backup size: ${_bu_size}"
+_s_inf "INFO: Remaining space available on backup device: ${_du_left}"
+_s_inf "INFO: Logfile: ${INF_FILE_STOR}"
+[ "x$APPLY_LOG" == "x1" ] && \
+   _s_inf "INFO: Last full backup fully prepared (including incrementals): ${_last_full_prep}"
+cp ${INF_FILE_WORK} ${INF_FILE_STOR}
 echo
 
 #if [ $CAN_REMOVE_UNPREPARED -eq 1 ]; then
