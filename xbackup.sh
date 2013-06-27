@@ -406,6 +406,7 @@ echo
 _status=0
 
 #Let's create the backup
+[ -d $WORK_DIR/bkps ] || mkdir $WORK_DIR/bkps/
 cd $WORK_DIR/bkps/
 _s_inf "INFO: Backing up with: $_ibx_bkp"
 $_ibx_bkp
