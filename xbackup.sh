@@ -639,7 +639,7 @@ echo
 
 _s_inf "INFO: Backup size: ${_bu_size}"
 _s_inf "INFO: Remaining space available on backup device: ${_du_left}"
-_s_inf "INFO: Logfile: ${INF_FILE_STOR}"
+_s_inf "INFO: Logfile: ${LOG_FILE}"
 [ "x$APPLY_LOG" == "x1" ] && \
    _s_inf "INFO: Last full backup fully prepared (including incrementals): ${_last_full_prep}"
 cp ${INF_FILE_WORK} ${INF_FILE_STOR}
