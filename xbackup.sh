@@ -458,22 +458,24 @@ if [ -n "$_last_bkp" ]; then
 
       cd $BNLGDIR
 
-      if [ "$STOR_CMP" == 1 ]; then
-         if [ -f "${_this_stor}/bnlg/${_last_binlog}.tar.gz" ]; then 
-            rm -rf "${_this_stor}/bnlg/${_last_binlog}.tar.gz"; 
-         fi
-         tar czvf "${_this_stor}/bnlg/${_last_binlog}.tar.gz" $_last_binlog
-      else
-         if [ -f "${_this_stor}/bnlg/${_last_binlog}" ]; then 
-            rm -rf "${_this_stor}/bnlg/${_last_binlog}"; 
-         fi
-         cp -v $_last_binlog "${_this_stor}/bnlg/"
-      fi
+      #if [ "$STOR_CMP" == 1 ]; then
+      #   if [ -f "${_this_stor}/bnlg/${_last_binlog}.tar.gz" ]; then 
+      #      rm -rf "${_this_stor}/bnlg/${_last_binlog}.tar.gz"; 
+      #   fi
+      #   tar czvf "${_this_stor}/bnlg/${_last_binlog}.tar.gz" $_last_binlog
+      #else
+      #   if [ -f "${_this_stor}/bnlg/${_last_binlog}" ]; then 
+      #      rm -rf "${_this_stor}/bnlg/${_last_binlog}"; 
+      #   fi
+      #   cp -v $_last_binlog "${_this_stor}/bnlg/"
+      #fi
 
-      for f in $(sed -e "1,/${_last_binlog}/d" $WORK_DIR/bkps/binlog.index); do
+      for f in $(grep -A $(cat $WORK_DIR/bkps/binlog.index|wc -l) "${_last_binlog}" $WORK_DIR/bkps/binlog.index); do
          if [ "$STOR_CMP" == 1 ]; then
+            [ -f "${_this_stor}/bnlg/${f}.tar.gz" ] && rm -rf "${_this_stor}/bnlg/${f}.tar.gz"
             tar czvf "${_this_stor}/bnlg/${f}.tar.gz" $f
          else
+            [ -f "${_this_stor}/bnlg/${f}" ] && rm -rf "${_this_stor}/bnlg/${f}"
             cp -v $f "${_this_stor}/bnlg/"
          fi
       done
