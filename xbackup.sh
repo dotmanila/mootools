@@ -39,13 +39,13 @@ BKP_TYPE=
 #    --incremental-basedir option for innobackupex.
 INC_BSEDIR=
 # Base dir, this is where the backup will be initially saved.
-WORK_DIR=/root/bkp/work
+WORK_DIR=/ssd/msb/msb_5_5_32/bkp/work
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
 # must exist a 'bkps' and 'bnlg' subdirectories. In absence of a final stor, backups
 # and binlogs will be saved to WORK_DIR
-STOR_DIR=/root/bkp/stor
+STOR_DIR=/ssd/msb/msb_5_5_32/bkp/stor
 
 # If you want to ship the backups to a remote server, specify
 # here the SSH username and password and the remote directory
@@ -55,8 +55,8 @@ STOR_DIR=/root/bkp/stor
 #RMTE_SSH="revin@127.0.0.1"
 
 # Where are the MySQL data and binlog directories
-DATADIR=/var/lib/mysql/
-BNLGDIR=/var/lib/mysql/
+DATADIR=/ssd/msb/msb_5_5_32/data/
+BNLGDIR=/ssd/msb/msb_5_5_32/data/
 # Include binary logs for each backup. Binary logs are incrementally
 # collected to $STOR_DIR/bnlg. The amount of binlog kept depends on
 # the oldest backup that exists
@@ -64,32 +64,32 @@ COPY_BINLOGS=1
 
 while  getopts "t:s:i:b:d:l:f" OPTION; do 
     case $OPTION in 
-	t) 
-	    BKP_TYPE=$OPTARG
-	    ;;
-	s)
-	    CURDATE=$OPTARG
-	    ;;
-	i)
-	    INC_BSEDIR=$OPTARG
-	    ;;
-	b)
-	    WORK_DIR=$OPTARG
-	    ;;
-	d)
-	    DATADIR=$OPTARG
-	    ;;
-	l)
-	    BNLGDIR=$OPTARG
-	    COPY_BINLOGS=1
-	    ;;
-	f)
-	    rm -f /tmp/xbackup.lock
-	    ;;
-	?)
-	usage
-	exit 1
-	;;
+        t) 
+            BKP_TYPE=$OPTARG
+            ;;
+        s)
+            CURDATE=$OPTARG
+            ;;
+        i)
+            INC_BSEDIR=$OPTARG
+            ;;
+        b)
+            WORK_DIR=$OPTARG
+            ;;
+        d)
+            DATADIR=$OPTARG
+            ;;
+        l)
+            BNLGDIR=$OPTARG
+            COPY_BINLOGS=1
+            ;;
+        f)
+            rm -f /tmp/xbackup.lock
+            ;;
+        ?)
+        usage
+        exit 1
+        ;;
     esac
 done
 
@@ -103,13 +103,13 @@ BNLGFMT=mysql-bin
 # verification that the backup is good for use.
 # Verification is done on a copy under WORK_DIR and an untouched
 # copy is stored on STOR_DIR
-APPLY_LOG=1
+APPLY_LOG=0
 
 # Whether to compress backups within STOR_DIR
-STOR_CMP=0
+STOR_CMP=1
 
 # When backing up from a Galera/XtraDB cluster node
-GALERA_INFO=1
+GALERA_INFO=0
 
 INF_FILE_STOR="${STOR_DIR}/bkps/${CURDATE}-info.log"
 LOG_FILE="${WORK_DIR}/bkps/${CURDATE}.log"
@@ -124,7 +124,7 @@ STORE=2
 KEEP_LCL=0
 
 # Will be used as --defaults-file for innobackupex if not empty
-DEFAULTS_FILE=
+DEFAULTS_FILE=/ssd/msb/msb_5_5_32/my.sandbox.cnf
 # Used as --use-memory option for innobackupex when APPLY_LOG is
 # enabled
 USE_MEMORY=1G
@@ -132,7 +132,7 @@ USE_MEMORY=1G
 # mysql client command line that will give access to the schema
 # and table where backups information will be stored. See
 # backup table structure below.
-MY="mysql percona"
+MY="/ssd/msb/msb_5_5_32/use percona"
 
 # How to flush logs, on versions < 5.5.3, the BINARY clause
 # is not yet supported. Not used at the moment.
@@ -321,9 +321,23 @@ touch /tmp/xbackup.lock
 if [ ! -n "${BKP_TYPE}" ]; then _d_inf "ERROR: No backup type specified!"; fi
 _s_inf "INFO: Backup type: ${BKP_TYPE}"
 
-[ ! -d "${STOR_DIR}/bnlg" ] && [ "x$COPY_BINLOGS" == "x1" ] && \
-   mkdir -p "${STOR_DIR}/bnlg" && \
+[ -d $STOR_DIR ] || \
+   _d_inf "ERROR: STOR_DIR ${STOR_DIR} does not exist, \
+      I will not create this automatically!"
+[ -d $WORK_DIR ] || \
+   _d_inf "ERROR: WORK_DIR ${WORK_DIR} does not exist, \
+      I will not create this automatically!"
+
+[ "x$COPY_BINLOGS" == "x1" ] && mkdir -p "${STOR_DIR}/bnlg" || \
    _d_inf "ERROR: ${STOR_DIR}/bnlg does no exist and cannot be created \
+      automatically!"
+
+mkdir -p "${STOR_DIR}/bkps" || \
+   _d_inf "ERROR: ${STOR_DIR}/bkps does no exist and cannot be created \
+      automatically!"
+
+mkdir -p "${WORK_DIR}/bkps" || \
+   _d_inf "ERROR: ${WORK_DIR}/bkps does no exist and cannot be created \
       automatically!"
 
 _start_backup_date=`date`
@@ -369,7 +383,7 @@ then
       _d_inf "ERROR: No valid incremental basedir found!"; 
    fi
 
-   [ "x$APPLY_LOG" == "x1" ] && \
+   [ "x$APPLY_LOG" == "x1" ] && [ "x$STOR_CMP" == "x1" ] && \
       _inc_basedir_path="${WORK_DIR}/bkps/${_inc_basedir}" || \
       _inc_basedir_path="${STOR_DIR}/bkps/${_inc_basedir}"
 
@@ -396,7 +410,8 @@ HASSPACE=`echo "${DATASIZE} ${DISKSPCE}"|awk '{if($1 < $2) {print 1} else {print
 NOSPACE=0
 
 _echo "INFO: Checking disk space ... (data: $DATASIZE) (disk: $DISKSPCE)"
-[ "$HASSPACE" -eq "$NOSPACE" ] && _d_inf "ERROR: Insufficient space on backup directory!"
+[ "$HASSPACE" -eq "$NOSPACE" ] && \
+   _d_inf "ERROR: Insufficient space on backup directory!"
 
 echo
 _s_inf "INFO: Xtrabackup started: `date`"
@@ -419,7 +434,8 @@ echo
 
 # Check the exit status from innobackupex, but dont exit right away if it failed
 if [ "$RETVAR" -gt 0 ]; then 
-   _d_inf "ERROR: non-zero exit status of xtrabackup during backup. Something may have failed!"; 
+   _d_inf "ERROR: non-zero exit status of xtrabackup during backup. \
+      Something may have failed!"; 
 fi
 
 if [ $COPY_BINLOGS -eq 1 ]; then
@@ -458,18 +474,6 @@ if [ -n "$_last_bkp" ]; then
 
       cd $BNLGDIR
 
-      #if [ "$STOR_CMP" == 1 ]; then
-      #   if [ -f "${_this_stor}/bnlg/${_last_binlog}.tar.gz" ]; then 
-      #      rm -rf "${_this_stor}/bnlg/${_last_binlog}.tar.gz"; 
-      #   fi
-      #   tar czvf "${_this_stor}/bnlg/${_last_binlog}.tar.gz" $_last_binlog
-      #else
-      #   if [ -f "${_this_stor}/bnlg/${_last_binlog}" ]; then 
-      #      rm -rf "${_this_stor}/bnlg/${_last_binlog}"; 
-      #   fi
-      #   cp -v $_last_binlog "${_this_stor}/bnlg/"
-      #fi
-
       for f in $(grep -A $(cat $WORK_DIR/bkps/binlog.index|wc -l) "${_last_binlog}" $WORK_DIR/bkps/binlog.index); do
          if [ "$STOR_CMP" == 1 ]; then
             [ -f "${_this_stor}/bnlg/${f}.tar.gz" ] && rm -rf "${_this_stor}/bnlg/${f}.tar.gz"
@@ -507,7 +511,8 @@ if [ -n "$STOR_DIR" ]; then
    fi
 
    if [ "$?" -gt 0 ]; then 
-      _s_inf "WARNING: Failed to copy ${_this_bkp} to ${STOR_DIR}/bkps/"; 
+      _s_inf "WARNING: Failed to copy ${_this_bkp} to ${STOR_DIR}/bkps/"
+      _s_inf "   I will not be able to delete old backups from your WORK_DIR"; 
    # Delete backup on work dir if no apply log is needed
    elif [ "$APPLY_LOG" == 0 ]; then
       cd $WORK_DIR/bkps/
@@ -563,7 +568,7 @@ if [ "$status" != 1 ]; then
       then
          _d_inf "ERROR: Base backup ${WORK_DIR}/bkps/${_incr_base} does not exist.";
       fi
-      _ibx_prep="${_ibx_prep} --apply-log ${WORK_DIR}/bkps/${_incr_base} --incremental-dir  ${_this_bkp}"
+      _ibx_prep="${_ibx_prep} --apply-log --redo-only ${WORK_DIR}/bkps/${_incr_base} --incremental-dir ${_this_bkp}"
       _echo "INFO: Preparing incremental backup with ${_ibx_prep}"
       _last_full_prep=${WORK_DIR}/bkps/${_incr_base}/
    else
@@ -572,7 +577,8 @@ if [ "$status" != 1 ]; then
       _bu_size=$(_du_r $_this_bkp)
       _du_left=$(_df $WORK_DIR)
       if [ "${_bu_size}" -gt "${_du_left}" ]; then
-         _d_inf "ERROR: Apply to copy was specified, however there is not enough disk space left on device.";
+         _d_inf "ERROR: Apply to copy was specified, however there is not \
+            enough disk space left on device.";
       else
          cp -r ${_this_bkp} ${_apply_to}
       fi
@@ -591,15 +597,14 @@ echo
 _s_inf "INFO: Apply log finished: ${_end_prepare_date}"
 echo
 
-CAN_REMOVE_UNPREPARED=0
 # Check the exit status from innobackupex, but dont exit right 
 # away if it failed
 if [ "$RETVAR" -gt 0 ]; then
    _s_inf "ERROR: non-zero exit status of xtrabackup during --apply-log. \
       Something may have failed! Please prepare, I have not deleted the \
       new backup directory.";
-else
-    CAN_REMOVE_UNPREPARED=1
+elif [ "x$STOR_CMP" != "x1" ]; then
+    rm -rf ${_this_bkp}
 fi
 
 # End, whether apply log is enabled
@@ -646,10 +651,6 @@ _s_inf "INFO: Logfile: ${LOG_FILE}"
    _s_inf "INFO: Last full backup fully prepared (including incrementals): ${_last_full_prep}"
 cp ${INF_FILE_WORK} ${INF_FILE_STOR}
 echo
-
-#if [ $CAN_REMOVE_UNPREPARED -eq 1 ]; then
-#    rm -rf ${_this_bkp}
-#fi
 
 rm -rf /tmp/xbackup.lock
 
