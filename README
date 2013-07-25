@@ -1,20 +1,38 @@
-# xbackup.sh
+xbackup.sh - Wrapper for Percona Xtrabackup
+-------------------------------------------
 
-Wrapper for Percona Xtrabackup
-
----
-
-
-## Requirements: 
-- percona xtrabackup
-- mysql/compatible server (to backup)
-- mysql/compatible server (to store backup metadata)
+REQUIREMENTS
+------------
+- Percona XtraBackup
+- MySQL/compatible server (to backup)
+- MySQL/compatible server (to store backup metadata)
 
 
-## Configuration: 
-- WORKDIR (line 43) must be set to the root of the directory you want backups to be saved. 
-- MY (line 135) must be set to the command line needed to access the metadata server (i.e. "mysql -uuser -ppass -hhost schema-name")
-- The following table must exist in the schema specified in the MY variable: 
+CONFIGURATION
+-------------
+APPLY_LOG	When set to 1, a copy of your backups will be maintained inside WORK_DIR/bkps 
+		where they will be prepared with "--apply-log --redo-only". This process
+		is applied for the full backup set starting with the most recent full backup 
+		and incremental backups if any. The resulting folder is prefixed with 'P_'.
+		See http://www.percona.com/doc/percona-xtrabackup/2.1/howtos/recipes_ibkx_inc.html
+
+STOR_CMP	Whether to compress your backups, although XtraBackup supports its own compression
+		the script only compresses using good ol' tarball for now.
+
+COPY_BINLOGS	Whether to maintain a copy of your binary logs as well. The number of binary logs
+		maintained depends on the oldest backup you have and the newest such that
+		you should be able to prepare your oldest backup and apply your binary logs up
+		to now. The bianry logs are stored inside STOR_DIR/bnlg
+
+WORK_DIR 	If you have enabled APPLY_LOG and/or STOR_CMP, certain backup copies will be
+		kept here.
+
+STOR_DIR	Where your actual raw (optionally compressed) backups will be stored.
+
+MY 		Must be set to the command line needed to access the metadata server 
+		(i.e. "mysql -uuser -ppass -hhost schema-name")
+		The following table must exist in the schema specified in the MY variable: 
+
 CREATE TABLE backups (
   id int(10) unsigned NOT NULL auto_increment,
   started_at timestamp NOT NULL default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP,
@@ -28,13 +46,20 @@ CREATE TABLE backups (
   PRIMARY KEY  (`id`)
 ) ENGINE=InnoDB;
 
-## Usage
+USAGE EXAMPLES
+--------------
 
-### Full backup
-./xbackup.sh -t full
+Create a full backup with:
 
-### Incremental backup
-./backup.sh -t incr
+bash xbackup.sh -t full
 
+Create an incremental backup with:
 
+bash xbackup.sh -t incr
+
+In case of a previous error and lock file was not removed, you can add -f to force the backup
+and remove the lock file afterwards. Note that you have to be sure you have already
+investigated the cause of the previous failure.
+
+bash xbackup.sh -t full -f
  
