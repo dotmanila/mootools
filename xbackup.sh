@@ -353,7 +353,8 @@ if [ "x$GALERA_INFO" == "x1" ]; then _ibx="${_ibx} --galera-info"; fi
 
 _ibx_bkp="${_ibx} --no-timestamp"
 _this_bkp="${WORK_DIR}/bkps/${CURDATE}"
-_this_bkp_stored="${STOR_DIR}/bkps/${CURDATE}"
+[ "x${STOR_CMP}" == "x1" ] && _this_bkp_stored="${STOR_DIR}/bkps/${CURDATE}.tar.gz" || \
+   _this_bkp_stored="${STOR_DIR}/bkps/${CURDATE}"
 _last_bkp=$(_sql_last_backup)
 
 if [ -n "$STOR_DIR" ]; then _this_stor=$STOR_DIR
