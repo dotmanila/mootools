@@ -16,7 +16,7 @@
 usage()
 {
 cat<<EOF >&2
-   usage: xbackup.sh -t <type> -ts timestamp -i incremental-basedir -b backup-dir -d datadir -f -l binlogs
+   usage: xbackup.sh -t <type> -s timestamp -i incremental-basedir -b backup-dir -d datadir -f -l binlogs
 
    Only <type> is mandatory, and it can be one of full or incr
 
@@ -35,11 +35,14 @@ CURDATE=$(date +%Y-%m-%d_%H_%M_%S)
 
 # Type of backup, accepts 'full' or 'incr'
 BKP_TYPE=
+
 # If type is incremental, and this options is specified, it will be used as 
 #    --incremental-basedir option for innobackupex.
 INC_BSEDIR=
+
 # Base dir, this is where the backup will be initially saved.
 WORK_DIR=/ssd/msb/msb_5_5_32/bkp/work
+
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
@@ -57,6 +60,7 @@ STOR_DIR=/ssd/msb/msb_5_5_32/bkp/stor
 # Where are the MySQL data and binlog directories
 DATADIR=/ssd/msb/msb_5_5_32/data/
 BNLGDIR=/ssd/msb/msb_5_5_32/data/
+
 # Include binary logs for each backup. Binary logs are incrementally
 # collected to $STOR_DIR/bnlg. The amount of binlog kept depends on
 # the oldest backup that exists
@@ -328,9 +332,11 @@ _s_inf "INFO: Backup type: ${BKP_TYPE}"
    _d_inf "ERROR: WORK_DIR ${WORK_DIR} does not exist, \
       I will not create this automatically!"
 
-[ "x$COPY_BINLOGS" == "x1" ] && mkdir -p "${STOR_DIR}/bnlg" || \
-   _d_inf "ERROR: ${STOR_DIR}/bnlg does no exist and cannot be created \
-      automatically!"
+if [ "x$COPY_BINLOGS" == "x1" ]; then
+   mkdir -p "${STOR_DIR}/bnlg" || \
+      _d_inf "ERROR: ${STOR_DIR}/bnlg does no exist and cannot be created \
+         automatically!"
+fi
 
 mkdir -p "${STOR_DIR}/bkps" || \
    _d_inf "ERROR: ${STOR_DIR}/bkps does no exist and cannot be created \
@@ -506,16 +512,19 @@ if [ -n "$STOR_DIR" ]; then
    _echo "INFO: Copying to immediate storage ${STOR_DIR}/bkps/"
    if [ "$STOR_CMP" == 1 ]; then
       tar czvf ${STOR_DIR}/bkps/${CURDATE}.tar.gz $CURDATE
+      ret=$?
       cp $_this_bkp/xtrabackup_binlog_info $STOR_DIR/bkps/${CURDATE}-xtrabackup_binlog_info.log
    else
       cp -r $_this_bkp* $STOR_DIR/bkps/
+      ret=$?
    fi
 
-   if [ "$?" -gt 0 ]; then 
+   if [ "x$ret" != "x0" ]; then 
       _s_inf "WARNING: Failed to copy ${_this_bkp} to ${STOR_DIR}/bkps/"
       _s_inf "   I will not be able to delete old backups from your WORK_DIR"; 
    # Delete backup on work dir if no apply log is needed
-   elif [ "$APPLY_LOG" == 0 ]; then
+   elif [ "x$APPLY_LOG" == "x0" ]; then
+      _echo "INFO: Cleaning up ${WORK_DIR}/bkps/"
       cd $WORK_DIR/bkps/
       rm -rf $(ls|grep -v ${CURDATE}*.log|xargs)
    # We also delete the previous incremental if the backup has been successful
