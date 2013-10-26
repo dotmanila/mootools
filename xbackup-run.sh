@@ -11,7 +11,7 @@ MAIL_TO_ERROR="me@example.com"
 
 if [ -f $LOG_FILE ]; then rm -rf $LOG_FILE; fi
 
-$BASE_DIR/xbackup.sh $1 ${CURDATE} 2>&1 | tee $LOG_FILE
+$BASE_DIR/xbackup.sh -t $1 -s ${CURDATE} 2>&1 | tee $LOG_FILE
 
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
   (echo "Subject: ERROR: MySQL Backup failed on `hostname`";
