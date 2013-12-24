@@ -526,14 +526,14 @@ if [ -n "$STOR_DIR" ]; then
    elif [ "x$APPLY_LOG" == "x0" ]; then
       _echo "INFO: Cleaning up ${WORK_DIR}/bkps/"
       cd $WORK_DIR/bkps/
-      rm -rf $(ls|grep -v ${CURDATE}*.log|xargs)
+      rm -rf $(find $WORK_DIR/bkps/ -maxdepth 1 -mindepth 1|grep -v ${CURDATE}*.log|xargs)
    # We also delete the previous incremental if the backup has been successful
    elif [ "${BKP_TYPE}" == "incr" ]; then 
       _echo "INFO: Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
       rm -rf ${WORK_DIR}/bkps/${_inc_basedir}*;
    elif [ "${BKP_TYPE}" == "full" ]; then 
-      _echo "INFO: Deleting previous work backups `find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs`"
-      find -maxdepth 1 -mindepth 1 | sort -n | grep -v $CURDATE|xargs rm -rf 
+      _echo "INFO: Deleting previous work backups $(find $WORK_DIR/bkps/ -maxdepth 1 -mindepth 1|grep -v ${CURDATE}|xargs)"
+      rm -rf $(find $WORK_DIR/bkps/ -maxdepth 1 -mindepth 1|grep -v ${CURDATE}|xargs)
    fi
    _echo " ... done"
 fi
