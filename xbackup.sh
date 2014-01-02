@@ -250,7 +250,7 @@ EOF
 _sql_last_backup() {
    _sql=$(cat <<EOF
    SELECT 
-      DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s') 
+      DATE_FORMAT(started_at,'%Y-%m-%d_%H_%i_%s'), weekno
    FROM backups 
    ORDER BY started_at DESC 
    LIMIT 1
@@ -361,7 +361,9 @@ _ibx_bkp="${_ibx} --no-timestamp"
 _this_bkp="${WORK_DIR}/bkps/${CURDATE}"
 [ "x${STOR_CMP}" == "x1" ] && _this_bkp_stored="${STOR_DIR}/bkps/${CURDATE}.tar.gz" || \
    _this_bkp_stored="${STOR_DIR}/bkps/${CURDATE}"
-_last_bkp=$(_sql_last_backup)
+set -- $(_sql_last_backup)
+_last_bkp=$1
+_week_no=$2
 
 if [ -n "$STOR_DIR" ]; then _this_stor=$STOR_DIR
 elif [ $KEEP_LCL -eq 1 ]; then _this_stor=$WORK_DIR
@@ -400,7 +402,6 @@ then
    fi
 
    _ibx_bkp="${_ibx_bkp} --incremental ${_this_bkp} --incremental-basedir ${_inc_basedir_path}"
-   _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${_inc_basedir}','%Y-%m-%d_%H_%i_%s'),'%U')")
    _echo "INFO: Running incremental backup from basedir ${_inc_basedir_path}"
 else
    _ibx_bkp="${_ibx_bkp} ${_this_bkp}"
