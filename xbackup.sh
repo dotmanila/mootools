@@ -392,7 +392,7 @@ then
       _d_inf "ERROR: No valid incremental basedir found!"; 
    fi
 
-   [ "x$APPLY_LOG" == "x1" ] && [ "x$STOR_CMP" == "x1" ] && \
+   ( [ "x$APPLY_LOG" == "x1" ] || [ "x$STOR_CMP" == "x1" ] ) && \
       _inc_basedir_path="${WORK_DIR}/bkps/${_inc_basedir}" || \
       _inc_basedir_path="${STOR_DIR}/bkps/${_inc_basedir}"
 
@@ -428,8 +428,8 @@ echo
 # Keep track if any errors happen
 _status=0
 
-#Let's create the backup
-[ -d $WORK_DIR/bkps ] || mkdir $WORK_DIR/bkps/
+# Let's create the backup folder
+[ -d $WORK_DIR/bkps/$CURDATE ] || mkdir $WORK_DIR/bkps/$CURDATE
 cd $WORK_DIR/bkps/
 _s_inf "INFO: Backing up with: $_ibx_bkp"
 $_ibx_bkp
