@@ -527,7 +527,14 @@ if [ -n "$STOR_DIR" ]; then
    elif [ "x$APPLY_LOG" == "x0" ]; then
       _echo "INFO: Cleaning up ${WORK_DIR}/bkps/"
       cd $WORK_DIR/bkps/
-      rm -rf $(find $WORK_DIR/bkps/ -maxdepth 1 -mindepth 1|grep -v ${CURDATE}*.log|xargs)
+      if [ "x$STOR_CMP" != "x1" ]; then
+         _rxp="$CURDATE[-info]?+.log"
+      else
+         _rxp="$CURDATE[-info.log]?"
+      fi
+      _echo "\"ls | grep -Ev $_rxp\""
+      ls | grep -Ev "$_rxp"
+      for f in $(ls | grep -Ev $_rxp); do rm -rf $f; done
    # We also delete the previous incremental if the backup has been successful
    elif [ "${BKP_TYPE}" == "incr" ]; then 
       _echo "INFO: Deleting previous incremental ${WORK_DIR}/bkps/${_inc_basedir}"
