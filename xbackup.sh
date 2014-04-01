@@ -428,8 +428,6 @@ echo
 # Keep track if any errors happen
 _status=0
 
-# Let's create the backup folder
-[ -d $WORK_DIR/bkps/$CURDATE ] || mkdir $WORK_DIR/bkps/$CURDATE
 cd $WORK_DIR/bkps/
 _s_inf "INFO: Backing up with: $_ibx_bkp"
 $_ibx_bkp
