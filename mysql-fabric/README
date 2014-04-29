@@ -1,0 +1,48 @@
+ Fabric System Wrapper
+ ---------------------
+
+ Initializer ready for these commands:
+
+ _init_all <WORK_DIR>
+       Meta function the bootstraps everything from 0 to a full running
+       Fabric system using 5.6.17 and 2 groups. Your system should be able
+       create MySQL sandboxes properly with 'make_sandbox 5.6.17' command
+ _teardown [<WORK_DIR>]
+       Teardown the whole Fabric system, WORK_DIR is optional if you are
+       operating inside a Fabric environment via _workon
+ _workon <WORK_DIR>
+       Setup the environment for this Fabric cluster within WORK_DIR
+ _init_utils [<WORK_DIR>]
+       Setup MySQL Utilities inside WORK_DIR
+ _init_mysql <WORK_DIR> <SANDBOX_VERSION> <NUMBER_OF_GROUPS>
+       Setup the MySQL nodes that will consist of Fabric groups and storage.
+       This function uses MySQL Sandbox and accepts the MySQL version within
+       you $SANDBOX_BINARY directory
+ _init_fabric [<WORK_DIR>]
+       Setup and start the Fabric system then create and add the HA groups
+       from _init_mysql
+ _eod
+       Exits the current Fabric environment which you have entered with '_workon'
+ GOOD LUCK!
+
+ 
+ Requirements:
+ ------------
+
+ 1. You must have a working MySQL Sandbox installation
+ 2. Only tested on CentOS Linux so far :-), obviously your need the same, though it should work on Debian based OSes too.
+
+ How to bootstrap a fabric system manually:
+ -----------------------------------------
+
+ # Assuming you want to install the system to /work/mysql/fabric
+ mkdir -p /work/mysql/fabric
+ source init.sh
+ _workon /work/mysql/fabric
+ _init_utils 
+ _init_mysql /work/mysql/fabric <MYSQL_SANDBOX_VERSION> <NO_OF_GROUPS>
+ _init_fabric
+ # You should be able to execute 'mysqlfabric group lookup_groups' here and list the number of groups you created
+
+ # Type _eod to exit the environment
+ # Type _teardown to destroy the whole fabric system
