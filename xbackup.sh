@@ -97,7 +97,7 @@ while  getopts "t:s:i:b:d:l:f" OPTION; do
     esac
 done
 
-# We need at least on arg, the backup type
+# We need at least one arg, the backup type
 [ $# -lt 1 -o -z "$BKP_TYPE" ] && { usage; exit 1; }
 
 # log-bin filename format, used when copying binary logs
