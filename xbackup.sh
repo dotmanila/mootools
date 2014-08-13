@@ -41,25 +41,25 @@ BKP_TYPE=
 INC_BSEDIR=
 
 # Base dir, this is where the backup will be initially saved.
-WORK_DIR=/ssd/msb/msb_5_5_32/bkp/work
+WORK_DIR=/sbx/msb/msb_5_5_38/bkp/work
 
 # This is where the backups will be stored after verification. If this is empty
 # backups will be stored within the WORK_DIR. This should already exist as we will
 # not try to create one automatically for safety purpose. Within ths directory
 # must exist a 'bkps' and 'bnlg' subdirectories. In absence of a final stor, backups
 # and binlogs will be saved to WORK_DIR
-STOR_DIR=/ssd/msb/msb_5_5_32/bkp/stor
+STOR_DIR=/sbx/msb/msb_5_5_38/bkp/stor
 
 # If you want to ship the backups to a remote server, specify
 # here the SSH username and password and the remote directory
 # for the backups. Absence of neither disables remote shipping
 # of backups
-#RMTE_DIR=/ssd/sb/xbackups/rmte
+#RMTE_DIR=/sbx/sb/xbackups/rmte
 #RMTE_SSH="revin@127.0.0.1"
 
 # Where are the MySQL data and binlog directories
-DATADIR=/ssd/msb/msb_5_5_32/data/
-BNLGDIR=/ssd/msb/msb_5_5_32/data/
+DATADIR=/sbx/msb/msb_5_5_38/data/
+BNLGDIR=/sbx/msb/msb_5_5_38/data/
 
 # Include binary logs for each backup. Binary logs are incrementally
 # collected to $STOR_DIR/bnlg. The amount of binlog kept depends on
@@ -128,7 +128,7 @@ STORE=2
 KEEP_LCL=0
 
 # Will be used as --defaults-file for innobackupex if not empty
-DEFAULTS_FILE=/ssd/msb/msb_5_5_32/my.sandbox.cnf
+DEFAULTS_FILE=/sbx/msb/msb_5_5_38/my.sandbox.cnf
 # Used as --use-memory option for innobackupex when APPLY_LOG is
 # enabled
 USE_MEMORY=1G
@@ -136,7 +136,7 @@ USE_MEMORY=1G
 # mysql client command line that will give access to the schema
 # and table where backups information will be stored. See
 # backup table structure below.
-MY="/ssd/msb/msb_5_5_32/use percona"
+MY="/sbx/msb/msb_5_5_38/use percona"
 
 # How to flush logs, on versions < 5.5.3, the BINARY clause
 # is not yet supported. Not used at the moment.
@@ -192,6 +192,32 @@ _d_inf() {
    exit 1
 }
 
+_sql_query() {
+   local _out="/tmp/xbackup.sql.out"
+   local _ret=0
+   local _try=3
+   local _sleep=30
+
+   for r in {1..$_try}; do
+      $MY -BNe "${1}" > /tmp/xbackup.sql.out 2>&1
+      _ret=${PIPESTATUS[0]}
+      if [ "x$_ret" != "x0" ]; then
+         sleep $_sleep
+      else
+         cat $_out
+         rm -rf $_out
+         break
+      fi
+   done
+
+   if [ "x$_ret" != "x0" ]; then
+      _s_inf "FATAL: Failed to execute SQL after attempting $_try times every $_sleep seconds, giving up!" | tee -a $_out
+      _s_inf "SQL: ${1}" | tee -a $_out
+      cat $_out
+      kill -s TERM $XBACKUP_PID
+   fi
+}
+
 # 
 # Returns a list of full backups (old ones > $STORE) whose
 #   set we will prune later
@@ -209,7 +235,7 @@ _sql_prune_base() {
 EOF
    )
 
-   $MY -BNe "${_sql}"
+   _sql_query "${_sql}"
 }
 
 #
@@ -226,7 +252,7 @@ _sql_prune_list() {
 EOF
    )
 
-   $MY -BNe "${_sql}"
+   _sql_query "${_sql}"
 }
 
 #
@@ -240,7 +266,7 @@ _sql_prune_rows() {
 EOF
    )
 
-   $MY -BNe "${_sql}"
+   _sql_query "${_sql}"
 }
 
 # 
@@ -257,7 +283,7 @@ _sql_last_backup() {
 EOF
    )
 
-   $MY -BNe "${_sql}"
+   _sql_query "${_sql}"
 }
 
 # 
@@ -275,7 +301,7 @@ _sql_first_backup_elapsed() {
 EOF
    )
 
-   $MY -BNe "${_sql}"
+   _sql_query "${_sql}"
 }
 
 #
@@ -293,7 +319,7 @@ _sql_save_bkp() {
 EOF
    )
 
-   $MY -BNe "${_sql}"
+   _sql_query "${_sql}"
 }
 
 # 
@@ -313,8 +339,26 @@ _sql_incr_bsedir() {
 EOF
       )
 
-   $MY -BNe "${_sql}"
+   _sql_query "${_sql}"
 }
+
+#
+# Get current week number from the database, we do this as system time
+#   could differ from DB time
+#
+_sql_get_week_no() {
+   _sql="SELECT DATE_FORMAT(STR_TO_DATE('${CURDATE}','%Y-%m-%d_%H_%i_%s'),'%U')"
+   _sql_query "${_sql}"
+}
+
+_error_handler() {
+   [ -f /tmp/xbackup.sql.out ] && cat /tmp/xbackup.sql.out \
+      && rm -rf /tmp/xbackup.sql.out
+   _d_inf "FATAL: Backup failed, please investigate!"
+}
+
+trap '_error_handler' TERM
+XBACKUP_PID=$$
 
 if [ -f /tmp/xbackup.lock ]; then 
    _d_inf "ERROR: Another backup is still running or a previous \
@@ -405,8 +449,8 @@ then
    _echo "INFO: Running incremental backup from basedir ${_inc_basedir_path}"
 else
    _ibx_bkp="${_ibx_bkp} ${_this_bkp}"
-   _week_no=$($MY -BNe "SELECT DATE_FORMAT(STR_TO_DATE('${CURDATE}','%Y-%m-%d_%H_%i_%s'),'%U')")
-   _echo "INFO: Running full backup ${_this_bkp}"
+   _week_no=$(_sql_get_week_no)
+   _echo "INFO: Running full backup (week no: ${_week_no}) ${_this_bkp}"
 fi
 
 # Check for work directory
@@ -512,7 +556,8 @@ if [ -n "$STOR_DIR" ]; then
    if [ "$STOR_CMP" == 1 ]; then
       tar czvf ${STOR_DIR}/bkps/${CURDATE}.tar.gz $CURDATE
       ret=$?
-      cp $_this_bkp/xtrabackup_binlog_info $STOR_DIR/bkps/${CURDATE}-xtrabackup_binlog_info.log
+      [ -f $_this_bkp/xtrabackup_binlog_info ] \
+         && cp $_this_bkp/xtrabackup_binlog_info $STOR_DIR/bkps/${CURDATE}-xtrabackup_binlog_info.log
    else
       cp -r $_this_bkp* $STOR_DIR/bkps/
       ret=$?
